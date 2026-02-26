@@ -1,0 +1,21 @@
+zig-cache/
+zig-out/
+zig-pkg/
+.zig-cache/
+.zig-out/
+
+# Foundry build artifacts (compiled mocks)
+tests/contracts/out/
+tests/contracts/cache/
+
+# OS files
+.DS_Store
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
