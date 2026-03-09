@@ -69,8 +69,9 @@ pub const quote_close_position: Function = .{
         .{ .name = "unexpectedReason", .abi_type = .bytes },
         .{ .name = "pnl", .abi_type = .int256 },
         .{ .name = "funding", .abi_type = .int256 },
-        .{ .name = "netMargin", .abi_type = .uint256 },
+        .{ .name = "netMargin", .abi_type = .int256 },
         .{ .name = "wasLiquidated", .abi_type = .bool },
+        .{ .name = "notional", .abi_type = .uint256 },
     },
 };
 pub const quote_close_position_selector = keccak.comptimeSelector("quoteClosePosition(uint256)");
@@ -110,14 +111,13 @@ pub const create_perp: Function = .{
             .{ .name = "marginRatios", .abi_type = .address },
             .{ .name = "lockupPeriod", .abi_type = .address },
             .{ .name = "sqrtPriceImpactLimit", .abi_type = .address },
-            .{ .name = "startingSqrtPriceX96", .abi_type = .uint160 },
         } },
     },
     .outputs = &.{
         .{ .name = "", .abi_type = .bytes32 },
     },
 };
-pub const create_perp_selector = keccak.comptimeSelector("createPerp((address,address,address,address,address,uint160))");
+pub const create_perp_selector = keccak.comptimeSelector("createPerp((address,address,address,address,address))");
 
 pub const open_taker_pos: Function = .{
     .name = "openTakerPos",
@@ -317,5 +317,69 @@ pub const position_closed: Event = .{
     .inputs = &.{
         .{ .name = "perpId", .abi_type = .bytes32, .indexed = true },
         .{ .name = "posId", .abi_type = .uint256, .indexed = true },
+        .{ .name = "exitPerpDelta", .abi_type = .int256 },
+        .{ .name = "exitUsdDelta", .abi_type = .int256 },
+        .{ .name = "tickLower", .abi_type = .int24 },
+        .{ .name = "tickUpper", .abi_type = .int24 },
+        .{ .name = "netUsdDelta", .abi_type = .int256 },
+        .{ .name = "funding", .abi_type = .int256 },
+        .{ .name = "utilizationFee", .abi_type = .uint256 },
+        .{ .name = "adl", .abi_type = .uint256 },
+        .{ .name = "liquidationFee", .abi_type = .uint256 },
+        .{ .name = "netMargin", .abi_type = .int256 },
     },
 };
+
+pub const module_registered: Event = .{
+    .name = "ModuleRegistered",
+    .inputs = &.{
+        .{ .name = "moduleType", .abi_type = .uint8, .indexed = true },
+        .{ .name = "module", .abi_type = .address, .indexed = true },
+    },
+};
+
+// -- Module registration functions --
+
+pub const register_module: Function = .{
+    .name = "registerModule",
+    .state_mutability = .nonpayable,
+    .inputs = &.{
+        .{ .name = "moduleType", .abi_type = .uint8 },
+        .{ .name = "module", .abi_type = .address },
+    },
+    .outputs = &.{},
+};
+pub const register_module_selector = keccak.comptimeSelector("registerModule(uint8,address)");
+
+pub const is_module_registered: Function = .{
+    .name = "isModuleRegistered",
+    .state_mutability = .view,
+    .inputs = &.{
+        .{ .name = "moduleType", .abi_type = .uint8 },
+        .{ .name = "module", .abi_type = .address },
+    },
+    .outputs = &.{
+        .{ .name = "", .abi_type = .bool },
+    },
+};
+pub const is_module_registered_selector = keccak.comptimeSelector("isModuleRegistered(uint8,address)");
+
+// -- Quote swap --
+
+pub const quote_swap: Function = .{
+    .name = "quoteSwap",
+    .state_mutability = .nonpayable,
+    .inputs = &.{
+        .{ .name = "perpId", .abi_type = .bytes32 },
+        .{ .name = "zeroForOne", .abi_type = .bool },
+        .{ .name = "isExactIn", .abi_type = .bool },
+        .{ .name = "amount", .abi_type = .uint256 },
+        .{ .name = "sqrtPriceLimitX96", .abi_type = .uint160 },
+    },
+    .outputs = &.{
+        .{ .name = "unexpectedReason", .abi_type = .bytes },
+        .{ .name = "perpDelta", .abi_type = .int256 },
+        .{ .name = "usdDelta", .abi_type = .int256 },
+    },
+};
+pub const quote_swap_selector = keccak.comptimeSelector("quoteSwap(bytes32,bool,bool,uint256,uint160)");

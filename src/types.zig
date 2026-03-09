@@ -116,7 +116,6 @@ pub const OpenMakerPositionParams = struct {
 };
 
 pub const CreatePerpParams = struct {
-    starting_price: f64,
     beacon: Address,
     fees: ?Address = null,
     margin_ratios: ?Address = null,

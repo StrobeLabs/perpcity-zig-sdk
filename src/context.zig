@@ -231,14 +231,14 @@ pub const PerpCityContext = struct {
             self.deployments.perp_manager,
             perp_manager_abi.quote_close_position_selector,
             &.{.{ .uint256 = pos_id }},
-            &.{ .bytes, .int256, .int256, .uint256, .bool },
+            &.{ .bytes, .int256, .int256, .int256, .bool, .uint256 },
         );
         defer contract.freeReturnValues(result, self.allocator);
 
         const live = types.LiveDetails{
             .pnl = conversions.scaleFrom6Decimals(@intCast(result[1].int256)),
             .funding_payment = conversions.scaleFrom6Decimals(@intCast(result[2].int256)),
-            .effective_margin = conversions.scaleFrom6Decimals(@intCast(result[3].uint256)),
+            .effective_margin = conversions.scaleFrom6Decimals(@intCast(result[3].int256)),
             .is_liquidatable = result[4].boolean,
         };
 

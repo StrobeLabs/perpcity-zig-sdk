@@ -22,7 +22,6 @@ pub const PerpManagerError = error{
     MarginMustBePositive,
     LeverageMustBePositive,
     InvalidPriceRange,
-    StartingPriceMustBePositive,
     MarginRatioOutOfRange,
     ModuleAddressRequired,
     TransactionReverted,
@@ -43,13 +42,6 @@ const POSITION_CLOSED_TOPIC = keccak.comptimeHash("PositionClosed(bytes32,uint25
 // ---------------------------------------------------------------------------
 
 pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.Bytes32 {
-    if (params.starting_price <= 0.0) {
-        return PerpManagerError.StartingPriceMustBePositive;
-    }
-
-    const sqrt_price_x96 = try conversions.priceToSqrtPriceX96(params.starting_price);
-    const sqrt_price_u160: u160 = @truncate(sqrt_price_x96);
-
     const fees_addr = params.fees orelse ctx.deployments.fees_module orelse types.ZERO_ADDRESS;
     const margin_ratios_addr = params.margin_ratios orelse ctx.deployments.margin_ratios_module orelse types.ZERO_ADDRESS;
     const lockup_addr = params.lockup_period orelse ctx.deployments.lockup_period_module orelse types.ZERO_ADDRESS;
@@ -66,7 +58,6 @@ pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.
             .{ .address = margin_ratios_addr },
             .{ .address = lockup_addr },
             .{ .address = sqrt_limit_addr },
-            .{ .uint256 = @as(u256, sqrt_price_u160) },
         } }},
     );
 
