@@ -4,8 +4,8 @@
     .fingerprint = 0xfab90a2f402a7502,
     .dependencies = .{
         .eth = .{
-            .url = "git+https://github.com/StrobeLabs/eth.zig.git#v0.2.2",
-            .hash = "eth_zig-0.2.2-efEm-kNdCQBcyYFAZG0FVkmPeN7lJkLLBDaTFp0T7lSD",
+            .url = "git+https://github.com/StrobeLabs/eth.zig.git#v0.3.0",
+            .hash = "eth_zig-0.3.0-efEm-i65QgC_yawMMg1E1xrc3E8yTZsAlfhj0wJjPyMe",
         },
     },
     .paths = .{
