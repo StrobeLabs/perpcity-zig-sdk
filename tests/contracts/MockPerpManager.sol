@@ -85,14 +85,14 @@ contract MockPerpManager {
         address marginRatios;
         address lockupPeriod;
         address sqrtPriceImpactLimit;
-        uint256 startingSqrtPriceX96;
     }
 
     struct QuoteResult {
         int256 pnl;
         int256 funding;
-        uint256 netMargin;
+        int256 netMargin;
         bool wasLiquidated;
+        uint256 notional;
     }
 
     // ======================== EVENTS ========================
@@ -126,10 +126,16 @@ contract MockPerpManager {
         bool wasMaker,
         bool wasLiquidated,
         bool wasPartialClose,
-        int256 perpDelta,
-        int256 usdDelta,
+        int256 exitPerpDelta,
+        int256 exitUsdDelta,
         int24 tickLower,
-        int24 tickUpper
+        int24 tickUpper,
+        int256 netUsdDelta,
+        int256 funding,
+        uint256 utilizationFee,
+        uint256 adl,
+        uint256 liquidationFee,
+        int256 netMargin
     );
 
     // ======================== STATE ========================
@@ -204,10 +210,11 @@ contract MockPerpManager {
         uint256 posId,
         int256 pnl,
         int256 funding,
-        uint256 netMargin,
-        bool wasLiquidated
+        int256 netMargin,
+        bool wasLiquidated,
+        uint256 notional
     ) external {
-        _quoteResults[posId] = QuoteResult(pnl, funding, netMargin, wasLiquidated);
+        _quoteResults[posId] = QuoteResult(pnl, funding, netMargin, wasLiquidated, notional);
     }
 
     // ======================== VIEW METHODS ========================
@@ -287,29 +294,29 @@ contract MockPerpManager {
             bytes memory unexpectedReason,
             int256 pnl,
             int256 funding,
-            uint256 netMargin,
-            bool wasLiquidated
+            int256 netMargin,
+            bool wasLiquidated,
+            uint256 notional
         )
     {
         if (!_positionExists[posId]) {
-            return (abi.encodeWithSignature("Error(string)", "position does not exist"), 0, 0, 0, false);
+            return (abi.encodeWithSignature("Error(string)", "position does not exist"), 0, 0, 0, false, 0);
         }
 
         QuoteResult memory result = _quoteResults[posId];
-        return (bytes(""), result.pnl, result.funding, result.netMargin, result.wasLiquidated);
+        return (bytes(""), result.pnl, result.funding, result.netMargin, result.wasLiquidated, result.notional);
     }
 
     // ======================== WRITE METHODS ========================
 
     /// @notice Create a new perp market
     function createPerp(CreatePerpParams calldata params) external returns (bytes32 perpId) {
-        // Generate a deterministic perpId
         perpId = keccak256(abi.encodePacked(block.timestamp, _nextPerpNonce++));
-
         _perpExists[perpId] = true;
-        _sqrtPrices[perpId] = params.startingSqrtPriceX96;
-
-        emit PerpCreated(perpId, params.beacon, params.startingSqrtPriceX96, params.startingSqrtPriceX96);
+        // Use a default sqrtPriceX96 (price = 1.0 = 2^96)
+        uint256 defaultSqrtPrice = 79228162514264337593543950336;
+        _sqrtPrices[perpId] = defaultSqrtPrice;
+        emit PerpCreated(perpId, params.beacon, defaultSqrtPrice, defaultSqrtPrice);
     }
 
     /// @notice Open a taker position
@@ -334,7 +341,7 @@ contract MockPerpManager {
         _positionExists[posId] = true;
 
         // Set default quote result (no PnL, margin = deposited margin)
-        _quoteResults[posId] = QuoteResult(0, 0, uint256(params.margin), false);
+        _quoteResults[posId] = QuoteResult(0, 0, int256(uint256(params.margin)), false, notional);
 
         emit PositionOpened(
             perpId,
@@ -365,7 +372,7 @@ contract MockPerpManager {
         _positionExists[posId] = true;
 
         // Set default quote result
-        _quoteResults[posId] = QuoteResult(0, 0, uint256(params.margin), false);
+        _quoteResults[posId] = QuoteResult(0, 0, int256(uint256(params.margin)), false, uint256(params.margin));
 
         emit PositionOpened(
             perpId,
@@ -385,25 +392,34 @@ contract MockPerpManager {
     function closePosition(ClosePositionParams calldata params) external {
         require(_positionExists[params.posId], "position does not exist");
 
-        Position memory pos = _positions[params.posId];
-        QuoteResult memory quote = _quoteResults[params.posId];
+        uint256 posId = params.posId;
+        Position memory pos = _positions[posId];
+        QuoteResult memory quote = _quoteResults[posId];
 
-        closedPositions[params.posId] = true;
-        _positionExists[params.posId] = false;
+        closedPositions[posId] = true;
+        _positionExists[posId] = false;
 
+        _emitPositionClosed(posId, pos, quote);
+    }
+
+    function _emitPositionClosed(
+        uint256 posId,
+        Position memory pos,
+        QuoteResult memory quote
+    ) internal {
         emit PositionClosed(
             pos.perpId,
             _sqrtPrices[pos.perpId],
-            1000, // longOI
-            1000, // shortOI
-            params.posId,
-            false, // wasMaker
+            1000, 1000,
+            posId,
+            false,
             quote.wasLiquidated,
-            false, // wasPartialClose
+            false,
             pos.entryPerpDelta,
             pos.entryUsdDelta,
-            -887220, // tickLower
-            887220   // tickUpper
+            -887220, 887220,
+            // new trailing fields
+            0, 0, 0, 0, 0, quote.netMargin
         );
     }
 }
