@@ -10,7 +10,7 @@ pub const index: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const index_selector = keccak.comptimeSelector("index()");
+pub const index_selector = keccak.selector("index()");
 
 pub const tw_avg: Function = .{
     .name = "twAvg",
@@ -22,4 +22,4 @@ pub const tw_avg: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const tw_avg_selector = keccak.comptimeSelector("twAvg(uint32)");
+pub const tw_avg_selector = keccak.selector("twAvg(uint32)");

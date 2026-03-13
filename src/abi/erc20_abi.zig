@@ -14,7 +14,7 @@ pub const approve: Function = .{
         .{ .name = "", .abi_type = .bool },
     },
 };
-pub const approve_selector = keccak.comptimeSelector("approve(address,uint256)");
+pub const approve_selector = keccak.selector("approve(address,uint256)");
 
 pub const balance_of: Function = .{
     .name = "balanceOf",
@@ -26,7 +26,7 @@ pub const balance_of: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const balance_of_selector = keccak.comptimeSelector("balanceOf(address)");
+pub const balance_of_selector = keccak.selector("balanceOf(address)");
 
 pub const allowance: Function = .{
     .name = "allowance",
@@ -39,4 +39,4 @@ pub const allowance: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const allowance_selector = keccak.comptimeSelector("allowance(address,address)");
+pub const allowance_selector = keccak.selector("allowance(address,address)");

@@ -29,7 +29,7 @@ pub const cfgs: Function = .{
         .{ .name = "sqrtPriceImpactLimit", .abi_type = .address },
     },
 };
-pub const cfgs_selector = keccak.comptimeSelector("cfgs(bytes32)");
+pub const cfgs_selector = keccak.selector("cfgs(bytes32)");
 
 pub const positions: Function = .{
     .name = "positions",
@@ -57,7 +57,7 @@ pub const positions: Function = .{
         } },
     },
 };
-pub const positions_selector = keccak.comptimeSelector("positions(uint256)");
+pub const positions_selector = keccak.selector("positions(uint256)");
 
 pub const quote_close_position: Function = .{
     .name = "quoteClosePosition",
@@ -74,7 +74,7 @@ pub const quote_close_position: Function = .{
         .{ .name = "notional", .abi_type = .uint256 },
     },
 };
-pub const quote_close_position_selector = keccak.comptimeSelector("quoteClosePosition(uint256)");
+pub const quote_close_position_selector = keccak.selector("quoteClosePosition(uint256)");
 
 pub const time_weighted_avg_sqrt_price_x96: Function = .{
     .name = "timeWeightedAvgSqrtPriceX96",
@@ -87,7 +87,7 @@ pub const time_weighted_avg_sqrt_price_x96: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const time_weighted_avg_sqrt_price_x96_selector = keccak.comptimeSelector("timeWeightedAvgSqrtPriceX96(bytes32,uint32)");
+pub const time_weighted_avg_sqrt_price_x96_selector = keccak.selector("timeWeightedAvgSqrtPriceX96(bytes32,uint32)");
 
 pub const protocol_fee: Function = .{
     .name = "protocolFee",
@@ -97,7 +97,7 @@ pub const protocol_fee: Function = .{
         .{ .name = "", .abi_type = .uint24 },
     },
 };
-pub const protocol_fee_selector = keccak.comptimeSelector("protocolFee()");
+pub const protocol_fee_selector = keccak.selector("protocolFee()");
 
 // -- Write functions --
 
@@ -117,7 +117,7 @@ pub const create_perp: Function = .{
         .{ .name = "", .abi_type = .bytes32 },
     },
 };
-pub const create_perp_selector = keccak.comptimeSelector("createPerp((address,address,address,address,address))");
+pub const create_perp_selector = keccak.selector("createPerp((address,address,address,address,address))");
 
 pub const open_taker_pos: Function = .{
     .name = "openTakerPos",
@@ -136,7 +136,7 @@ pub const open_taker_pos: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const open_taker_pos_selector = keccak.comptimeSelector("openTakerPos(bytes32,(address,bool,uint128,uint24,uint128))");
+pub const open_taker_pos_selector = keccak.selector("openTakerPos(bytes32,(address,bool,uint128,uint24,uint128))");
 
 pub const open_maker_pos: Function = .{
     .name = "openMakerPos",
@@ -157,7 +157,7 @@ pub const open_maker_pos: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const open_maker_pos_selector = keccak.comptimeSelector("openMakerPos(bytes32,(address,uint128,uint120,int24,int24,uint128,uint128))");
+pub const open_maker_pos_selector = keccak.selector("openMakerPos(bytes32,(address,uint128,uint120,int24,int24,uint128,uint128))");
 
 pub const close_position: Function = .{
     .name = "closePosition",
@@ -172,7 +172,7 @@ pub const close_position: Function = .{
     },
     .outputs = &.{},
 };
-pub const close_position_selector = keccak.comptimeSelector("closePosition((uint256,uint128,uint128,uint128))");
+pub const close_position_selector = keccak.selector("closePosition((uint256,uint128,uint128,uint128))");
 
 pub const adjust_notional: Function = .{
     .name = "adjustNotional",
@@ -186,7 +186,7 @@ pub const adjust_notional: Function = .{
     },
     .outputs = &.{},
 };
-pub const adjust_notional_selector = keccak.comptimeSelector("adjustNotional((uint256,int256,uint128))");
+pub const adjust_notional_selector = keccak.selector("adjustNotional((uint256,int256,uint128))");
 
 pub const adjust_margin: Function = .{
     .name = "adjustMargin",
@@ -199,7 +199,7 @@ pub const adjust_margin: Function = .{
     },
     .outputs = &.{},
 };
-pub const adjust_margin_selector = keccak.comptimeSelector("adjustMargin((uint256,int256))");
+pub const adjust_margin_selector = keccak.selector("adjustMargin((uint256,int256))");
 
 pub const funding_per_second_x96: Function = .{
     .name = "fundingPerSecondX96",
@@ -211,7 +211,7 @@ pub const funding_per_second_x96: Function = .{
         .{ .name = "", .abi_type = .int256 },
     },
 };
-pub const funding_per_second_x96_selector = keccak.comptimeSelector("fundingPerSecondX96(bytes32)");
+pub const funding_per_second_x96_selector = keccak.selector("fundingPerSecondX96(bytes32)");
 
 pub const util_fee_per_sec_x96: Function = .{
     .name = "utilFeePerSecX96",
@@ -223,7 +223,7 @@ pub const util_fee_per_sec_x96: Function = .{
         .{ .name = "", .abi_type = .uint256 },
     },
 };
-pub const util_fee_per_sec_x96_selector = keccak.comptimeSelector("utilFeePerSecX96(bytes32)");
+pub const util_fee_per_sec_x96_selector = keccak.selector("utilFeePerSecX96(bytes32)");
 
 pub const insurance: Function = .{
     .name = "insurance",
@@ -235,7 +235,7 @@ pub const insurance: Function = .{
         .{ .name = "", .abi_type = .uint128 },
     },
 };
-pub const insurance_selector = keccak.comptimeSelector("insurance(bytes32)");
+pub const insurance_selector = keccak.selector("insurance(bytes32)");
 
 pub const taker_open_interest: Function = .{
     .name = "takerOpenInterest",
@@ -248,7 +248,7 @@ pub const taker_open_interest: Function = .{
         .{ .name = "shortOI", .abi_type = .uint128 },
     },
 };
-pub const taker_open_interest_selector = keccak.comptimeSelector("takerOpenInterest(bytes32)");
+pub const taker_open_interest_selector = keccak.selector("takerOpenInterest(bytes32)");
 
 pub const quote_open_taker_position: Function = .{
     .name = "quoteOpenTakerPosition",
@@ -269,7 +269,7 @@ pub const quote_open_taker_position: Function = .{
         .{ .name = "funding", .abi_type = .int256 },
     },
 };
-pub const quote_open_taker_position_selector = keccak.comptimeSelector("quoteOpenTakerPosition(bytes32,(address,bool,uint128,uint24,uint128))");
+pub const quote_open_taker_position_selector = keccak.selector("quoteOpenTakerPosition(bytes32,(address,bool,uint128,uint24,uint128))");
 
 pub const quote_open_maker_position: Function = .{
     .name = "quoteOpenMakerPosition",
@@ -292,7 +292,7 @@ pub const quote_open_maker_position: Function = .{
         .{ .name = "funding", .abi_type = .int256 },
     },
 };
-pub const quote_open_maker_position_selector = keccak.comptimeSelector("quoteOpenMakerPosition(bytes32,(address,uint128,uint120,int24,int24,uint128,uint128))");
+pub const quote_open_maker_position_selector = keccak.selector("quoteOpenMakerPosition(bytes32,(address,uint128,uint120,int24,int24,uint128,uint128))");
 
 // -- Events --
 
@@ -349,7 +349,7 @@ pub const register_module: Function = .{
     },
     .outputs = &.{},
 };
-pub const register_module_selector = keccak.comptimeSelector("registerModule(uint8,address)");
+pub const register_module_selector = keccak.selector("registerModule(uint8,address)");
 
 pub const is_module_registered: Function = .{
     .name = "isModuleRegistered",
@@ -362,7 +362,7 @@ pub const is_module_registered: Function = .{
         .{ .name = "", .abi_type = .bool },
     },
 };
-pub const is_module_registered_selector = keccak.comptimeSelector("isModuleRegistered(uint8,address)");
+pub const is_module_registered_selector = keccak.selector("isModuleRegistered(uint8,address)");
 
 // -- Quote swap --
 
@@ -382,4 +382,4 @@ pub const quote_swap: Function = .{
         .{ .name = "usdDelta", .abi_type = .int256 },
     },
 };
-pub const quote_swap_selector = keccak.comptimeSelector("quoteSwap(bytes32,bool,bool,uint256,uint160)");
+pub const quote_swap_selector = keccak.selector("quoteSwap(bytes32,bool,bool,uint256,uint160)");
