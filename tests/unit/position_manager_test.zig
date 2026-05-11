@@ -58,7 +58,7 @@ test "track and get - stores and retrieves a position" {
 
     try mgr.track(pos);
 
-    const retrieved = mgr.get(1).?;
+    const retrieved = mgr.get(makePerp(0xAA), 1).?;
     try std.testing.expectEqual(@as(u256, 1), retrieved.position_id);
     try std.testing.expectEqual(true, retrieved.is_long);
     try std.testing.expectEqual(@as(f64, 1500.0), retrieved.entry_price);
@@ -71,7 +71,7 @@ test "get - returns null for non-existent position" {
     var mgr = PositionManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    try std.testing.expectEqual(@as(?ManagedPosition, null), mgr.get(999));
+    try std.testing.expectEqual(@as(?ManagedPosition, null), mgr.get(makePerp(0xAA), 999));
 }
 
 test "track - overwrites existing position with same ID" {
@@ -87,7 +87,7 @@ test "track - overwrites existing position with same ID" {
     try mgr.track(pos2);
 
     try std.testing.expectEqual(@as(usize, 1), mgr.count());
-    const retrieved = mgr.get(1).?;
+    const retrieved = mgr.get(makePerp(0xAA), 1).?;
     try std.testing.expectEqual(@as(f64, 1600.0), retrieved.entry_price);
     try std.testing.expectEqual(@as(f64, 200.0), retrieved.margin);
 }
@@ -103,16 +103,16 @@ test "untrack - removes tracked position and returns true" {
     try mgr.track(makeLongPosition(1, 1500.0, 100.0));
     try std.testing.expectEqual(@as(usize, 1), mgr.count());
 
-    try std.testing.expect(mgr.untrack(1));
+    try std.testing.expect(mgr.untrack(makePerp(0xAA), 1));
     try std.testing.expectEqual(@as(usize, 0), mgr.count());
-    try std.testing.expectEqual(@as(?ManagedPosition, null), mgr.get(1));
+    try std.testing.expectEqual(@as(?ManagedPosition, null), mgr.get(makePerp(0xAA), 1));
 }
 
 test "untrack - returns false for non-existent position" {
     var mgr = PositionManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    try std.testing.expect(!mgr.untrack(999));
+    try std.testing.expect(!mgr.untrack(makePerp(0xAA), 999));
 }
 
 // =============================================================================
@@ -232,7 +232,7 @@ test "checkTriggers - trailing stop updates high-water mark and triggers on retr
 
     // Verify high-water mark was set
     {
-        const p = mgr.get(1).?;
+        const p = mgr.get(makePerp(0xAA), 1).?;
         try std.testing.expectEqual(@as(?f64, 1600.0), p.trailing_stop_high);
     }
 
@@ -245,7 +245,7 @@ test "checkTriggers - trailing stop updates high-water mark and triggers on retr
 
     // Verify high-water mark updated
     {
-        const p = mgr.get(1).?;
+        const p = mgr.get(makePerp(0xAA), 1).?;
         try std.testing.expectEqual(@as(?f64, 1700.0), p.trailing_stop_high);
     }
 
@@ -299,7 +299,7 @@ test "checkTriggers - trailing stop for short tracks lowest price and triggers o
 
     // Verify low-water mark updated
     {
-        const p = mgr.get(2).?;
+        const p = mgr.get(makePerp(0xBB), 2).?;
         try std.testing.expectEqual(@as(?f64, 1300.0), p.trailing_stop_high);
     }
 
@@ -388,7 +388,7 @@ test "checkTriggers - stop loss for short takes priority over take profit" {
 }
 
 // =============================================================================
-// allPositionIds and count
+// allPositionKeys and count
 // =============================================================================
 
 test "count - returns zero on empty manager" {
@@ -408,21 +408,21 @@ test "count - tracks number of managed positions" {
     try mgr.track(makeShortPosition(2, 1500.0, 100.0));
     try std.testing.expectEqual(@as(usize, 2), mgr.count());
 
-    _ = mgr.untrack(1);
+    _ = mgr.untrack(makePerp(0xAA), 1);
     try std.testing.expectEqual(@as(usize, 1), mgr.count());
 }
 
-test "allPositionIds - returns empty slice when no positions" {
+test "allPositionKeys - returns empty slice when no positions" {
     var mgr = PositionManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    const ids = try mgr.allPositionIds();
-    defer std.testing.allocator.free(ids);
+    const keys = try mgr.allPositionKeys();
+    defer std.testing.allocator.free(keys);
 
-    try std.testing.expectEqual(@as(usize, 0), ids.len);
+    try std.testing.expectEqual(@as(usize, 0), keys.len);
 }
 
-test "allPositionIds - returns all tracked position IDs" {
+test "allPositionKeys - returns (perp, position_id) for every tracked position" {
     var mgr = PositionManager.init(std.testing.allocator);
     defer mgr.deinit();
 
@@ -430,17 +430,21 @@ test "allPositionIds - returns all tracked position IDs" {
     try mgr.track(makeShortPosition(20, 1500.0, 100.0));
     try mgr.track(makeLongPosition(30, 1600.0, 200.0));
 
-    const ids = try mgr.allPositionIds();
-    defer std.testing.allocator.free(ids);
+    const keys = try mgr.allPositionKeys();
+    defer std.testing.allocator.free(keys);
 
-    try std.testing.expectEqual(@as(usize, 3), ids.len);
+    try std.testing.expectEqual(@as(usize, 3), keys.len);
 
-    // Sort for deterministic comparison (hash map order is not guaranteed)
-    std.mem.sort(u256, ids, {}, std.sort.asc(u256));
+    // Sort by position_id for deterministic comparison.
+    std.mem.sort(pm.PositionKey, keys, {}, struct {
+        fn lessThan(_: void, a: pm.PositionKey, b: pm.PositionKey) bool {
+            return a.position_id < b.position_id;
+        }
+    }.lessThan);
 
-    try std.testing.expectEqual(@as(u256, 10), ids[0]);
-    try std.testing.expectEqual(@as(u256, 20), ids[1]);
-    try std.testing.expectEqual(@as(u256, 30), ids[2]);
+    try std.testing.expectEqual(@as(u256, 10), keys[0].position_id);
+    try std.testing.expectEqual(@as(u256, 20), keys[1].position_id);
+    try std.testing.expectEqual(@as(u256, 30), keys[2].position_id);
 }
 
 // =============================================================================
@@ -535,11 +539,11 @@ test "getMut - returns mutable pointer to position" {
     try mgr.track(pos);
 
     // Modify via getMut
-    const ptr = mgr.getMut(1).?;
+    const ptr = mgr.getMut(makePerp(0xAA), 1).?;
     ptr.stop_loss = 1350.0;
 
     // Verify modification persisted
-    const retrieved = mgr.get(1).?;
+    const retrieved = mgr.get(makePerp(0xAA), 1).?;
     try std.testing.expectEqual(@as(?f64, 1350.0), retrieved.stop_loss);
 }
 
@@ -547,5 +551,5 @@ test "getMut - returns null for non-existent position" {
     var mgr = PositionManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    try std.testing.expect(mgr.getMut(999) == null);
+    try std.testing.expect(mgr.getMut(makePerp(0xAA), 999) == null);
 }

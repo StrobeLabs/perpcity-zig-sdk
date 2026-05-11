@@ -143,7 +143,8 @@ test "user_errors are never retryable" {
     };
     for (user_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| try std.testing.expectEqual(false, i.can_retry);
+        try std.testing.expect(info != null);
+        try std.testing.expectEqual(false, info.?.can_retry);
     }
 }
 
@@ -154,7 +155,8 @@ test "state_errors are retryable" {
     };
     for (state_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| try std.testing.expectEqual(true, i.can_retry);
+        try std.testing.expect(info != null);
+        try std.testing.expectEqual(true, info.?.can_retry);
     }
 }
 
@@ -165,7 +167,8 @@ test "system_errors are retryable" {
     };
     for (system_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| try std.testing.expectEqual(true, i.can_retry);
+        try std.testing.expect(info != null);
+        try std.testing.expectEqual(true, info.?.can_retry);
     }
 }
 
@@ -176,7 +179,8 @@ test "config_errors are not retryable" {
     };
     for (config_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| try std.testing.expectEqual(false, i.can_retry);
+        try std.testing.expect(info != null);
+        try std.testing.expectEqual(false, info.?.can_retry);
     }
 }
 

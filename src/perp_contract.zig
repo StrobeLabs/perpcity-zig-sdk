@@ -54,7 +54,7 @@ pub fn openTaker(
         } }},
     );
 
-    const pos_id = try decodePositionId(ctx, tx_hash, perp_abi.taker_opened_topic);
+    const pos_id = try decodePositionId(ctx, tx_hash, perp, perp_abi.taker_opened_topic);
 
     return OpenPosition{
         .ctx = ctx,
@@ -106,7 +106,7 @@ pub fn openMaker(
         } }},
     );
 
-    const pos_id = try decodePositionId(ctx, tx_hash, perp_abi.maker_opened_topic);
+    const pos_id = try decodePositionId(ctx, tx_hash, perp, perp_abi.maker_opened_topic);
 
     return OpenPosition{
         .ctx = ctx,
@@ -300,18 +300,23 @@ pub fn collectProtocolFees(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Scan a transaction receipt for an event with `expected_topic` and decode
-/// the position id from the first 32 bytes of its log `data`. Returns
-/// `EventDecodeFailed` if no matching log is found.
+/// Scan a transaction receipt for an event with `expected_topic` emitted by
+/// `expected_emitter` and decode the position id from the first 32 bytes of
+/// its log `data`. Returns `EventDecodeFailed` if no matching log is found,
+/// or `TransactionReverted` if the receipt's status is not 1.
 fn decodePositionId(
     ctx: *PerpCityContext,
     tx_hash: types.Bytes32,
+    expected_emitter: types.Address,
     expected_topic: [32]u8,
 ) !u256 {
     const receipt = (try ctx.wallet.waitForReceipt(tx_hash, 10)) orelse
         return PerpError.EventDecodeFailed;
 
+    if (receipt.status != 1) return PerpError.TransactionReverted;
+
     for (receipt.logs) |log| {
+        if (!std.mem.eql(u8, &log.address, &expected_emitter)) continue;
         if (log.topics.len == 0) continue;
         if (!std.mem.eql(u8, &log.topics[0], &expected_topic)) continue;
         if (log.data.len < 32) continue;

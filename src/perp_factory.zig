@@ -54,9 +54,15 @@ pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.
     const receipt = (try ctx.wallet.waitForReceipt(tx_hash, 10)) orelse
         return FactoryError.EventDecodeFailed;
 
+    if (receipt.status != 1) return FactoryError.TransactionReverted;
+
     // PerpCreated is non-indexed in v0.1.0: decode the first ABI word
-    // (offset 0..32) of the log `data` to get the `perp` address.
+    // (offset 0..32) of the log `data` to get the `perp` address. Filter
+    // by emitter so we don't pick up a same-signature event from another
+    // contract that ran in the same tx.
+    const factory_addr = ctx.deployments.perp_factory;
     for (receipt.logs) |log| {
+        if (!std.mem.eql(u8, &log.address, &factory_addr)) continue;
         if (log.topics.len == 0) continue;
         if (!std.mem.eql(u8, &log.topics[0], &perp_factory_abi.perp_created_topic)) continue;
         if (log.data.len < 32) continue;
