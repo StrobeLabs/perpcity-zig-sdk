@@ -10,13 +10,13 @@ const TriggerAction = pm.TriggerAction;
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn makePerp(byte: u8) [32]u8 {
-    return [_]u8{byte} ** 32;
+fn makePerp(byte: u8) [20]u8 {
+    return [_]u8{byte} ** 20;
 }
 
 fn makeLongPosition(id: u256, entry_price: f64, margin: f64) ManagedPosition {
     return .{
-        .perp_id = makePerp(0xAA),
+        .perp = makePerp(0xAA),
         .position_id = id,
         .is_long = true,
         .is_maker = false,
@@ -27,7 +27,7 @@ fn makeLongPosition(id: u256, entry_price: f64, margin: f64) ManagedPosition {
 
 fn makeShortPosition(id: u256, entry_price: f64, margin: f64) ManagedPosition {
     return .{
-        .perp_id = makePerp(0xBB),
+        .perp = makePerp(0xBB),
         .position_id = id,
         .is_long = false,
         .is_maker = false,

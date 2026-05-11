@@ -8,7 +8,12 @@ const AnvilProcess = anvil_mod.AnvilProcess;
 const DeployedContracts = mock_deployer.DeployedContracts;
 const PerpCityContext = context_mod.PerpCityContext;
 
-/// Full integration test setup: Anvil node + deployed mock contracts + SDK context.
+/// Full integration test setup: Anvil node + deployed mock contracts (v0.1.0
+/// stack) + SDK context.
+///
+/// Integration tests call `AnvilSetup.init` once, then drive the SDK against
+/// the populated `context` field. Each market is created via the factory by
+/// the test itself (or by a helper that wraps `perp_factory.createPerp`).
 pub const AnvilSetup = struct {
     anvil: AnvilProcess,
     contracts: DeployedContracts,
@@ -16,50 +21,23 @@ pub const AnvilSetup = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) !AnvilSetup {
-        var anvil_proc = try AnvilProcess.start(allocator, AnvilProcess.DEFAULT_PORT, io);
-        errdefer anvil_proc.stop();
-
-        const contracts = try mock_deployer.deployAll(allocator, anvil_proc.rpc_url, io);
-
-        const ctx = try PerpCityContext.init(
-            allocator,
-            anvil_proc.rpc_url,
-            mock_deployer.DEPLOYER_PRIVATE_KEY,
-            .{
-                .perp_manager = contracts.perp_manager,
-                .usdc = contracts.usdc,
-                .fees_module = contracts.fees,
-                .margin_ratios_module = contracts.margin_ratios,
-            },
-            io,
-        );
-
-        return AnvilSetup{
-            .anvil = anvil_proc,
-            .contracts = contracts,
-            .context = ctx,
-            .allocator = allocator,
-        };
+        return initWithPort(allocator, AnvilProcess.DEFAULT_PORT, io);
     }
 
     pub fn initWithPort(allocator: std.mem.Allocator, port: u16, io: std.Io) !AnvilSetup {
         var anvil_proc = try AnvilProcess.start(allocator, port, io);
         errdefer anvil_proc.stop();
 
-        const contracts = try mock_deployer.deployAll(allocator, anvil_proc.rpc_url, io);
+        const contracts = try mock_deployer.deployAll(allocator, anvil_proc.rpc_url);
+        try mock_deployer.registerModules(allocator, anvil_proc.rpc_url, contracts);
 
-        const ctx = try PerpCityContext.init(
+        var ctx = PerpCityContext.init(
             allocator,
             anvil_proc.rpc_url,
             mock_deployer.DEPLOYER_PRIVATE_KEY,
-            .{
-                .perp_manager = contracts.perp_manager,
-                .usdc = contracts.usdc,
-                .fees_module = contracts.fees,
-                .margin_ratios_module = contracts.margin_ratios,
-            },
-            io,
+            mock_deployer.deploymentsFrom(contracts),
         );
+        ctx.fixPointers();
 
         return AnvilSetup{
             .anvil = anvil_proc,
@@ -87,6 +65,17 @@ pub const AnvilSetup = struct {
     pub fn deployerPrivateKey(self: *const AnvilSetup) [32]u8 {
         _ = self;
         return mock_deployer.DEPLOYER_PRIVATE_KEY;
+    }
+
+    pub fn defaultModules(self: *const AnvilSetup) types.Modules {
+        return .{
+            .beacon = self.contracts.beacon,
+            .fees = self.contracts.fees,
+            .funding = self.contracts.funding,
+            .margin_ratios = self.contracts.margin_ratios,
+            .price_impact = self.contracts.price_impact,
+            .pricing = self.contracts.pricing,
+        };
     }
 };
 

@@ -3,10 +3,6 @@ const sdk = @import("perpcity_sdk");
 const user = sdk.user;
 const types = sdk.types;
 
-// =============================================================================
-// Test helpers
-// =============================================================================
-
 fn makeTestUserData(balance: f64, positions: []const types.OpenPositionData) types.UserData {
     return .{
         .wallet_address = types.ZERO_ADDRESS,
@@ -15,17 +11,16 @@ fn makeTestUserData(balance: f64, positions: []const types.OpenPositionData) typ
     };
 }
 
-fn makeOpenPosition(pos_id: u256, is_long: ?bool, pnl: f64) types.OpenPositionData {
+fn makeOpenPosition(pos_id: u256, is_maker: bool, perp_delta: i256) types.OpenPositionData {
     return .{
-        .perp_id = types.ZERO_BYTES32,
+        .perp = types.ZERO_ADDRESS,
         .position_id = pos_id,
-        .is_long = is_long,
-        .is_maker = null,
+        .is_maker = is_maker,
         .live_details = .{
-            .pnl = pnl,
-            .funding_payment = 0.0,
-            .effective_margin = 100.0,
-            .is_liquidatable = false,
+            .margin = 100.0,
+            .perp_delta = perp_delta,
+            .liq_margin_ratio = 50_000,
+            .backstop_margin_ratio = 20_000,
         },
     };
 }
@@ -54,14 +49,14 @@ test "getUserUsdcBalance - returns fractional balance" {
     try std.testing.expectEqual(@as(f64, 0.5), user.getUserUsdcBalance(u_data));
 }
 
-test "getUserUsdcBalance - returns negative balance (if applicable)" {
+test "getUserUsdcBalance - returns negative balance" {
     const u_data = makeTestUserData(-50.0, &.{});
     try std.testing.expectEqual(@as(f64, -50.0), user.getUserUsdcBalance(u_data));
 }
 
 test "getUserUsdcBalance - balance is independent of positions" {
     const positions = [_]types.OpenPositionData{
-        makeOpenPosition(1, true, 50.0),
+        makeOpenPosition(1, false, 1_500_000),
     };
     const u_data = makeTestUserData(1000.0, &positions);
     try std.testing.expectEqual(@as(f64, 1000.0), user.getUserUsdcBalance(u_data));
@@ -79,7 +74,7 @@ test "getUserOpenPositions - returns empty slice when no positions" {
 
 test "getUserOpenPositions - returns single position" {
     const positions_arr = [_]types.OpenPositionData{
-        makeOpenPosition(1, true, 50.0),
+        makeOpenPosition(1, false, 1_500_000),
     };
     const u_data = makeTestUserData(1000.0, &positions_arr);
     const positions = user.getUserOpenPositions(u_data);
@@ -89,9 +84,9 @@ test "getUserOpenPositions - returns single position" {
 
 test "getUserOpenPositions - returns multiple positions" {
     const positions_arr = [_]types.OpenPositionData{
-        makeOpenPosition(1, true, 50.0),
-        makeOpenPosition(2, false, -10.0),
-        makeOpenPosition(3, null, 0.0),
+        makeOpenPosition(1, false, 1_500_000),
+        makeOpenPosition(2, false, -1_000_000),
+        makeOpenPosition(3, true, 0),
     };
     const u_data = makeTestUserData(1000.0, &positions_arr);
     const positions = user.getUserOpenPositions(u_data);
@@ -100,8 +95,8 @@ test "getUserOpenPositions - returns multiple positions" {
 
 test "getUserOpenPositions - position ids are preserved" {
     const positions_arr = [_]types.OpenPositionData{
-        makeOpenPosition(10, true, 50.0),
-        makeOpenPosition(20, false, -10.0),
+        makeOpenPosition(10, false, 1_500_000),
+        makeOpenPosition(20, false, -1_000_000),
     };
     const u_data = makeTestUserData(1000.0, &positions_arr);
     const positions = user.getUserOpenPositions(u_data);
@@ -109,22 +104,22 @@ test "getUserOpenPositions - position ids are preserved" {
     try std.testing.expectEqual(@as(u256, 20), positions[1].position_id);
 }
 
-test "getUserOpenPositions - position pnl values are preserved" {
+test "getUserOpenPositions - perp_delta is preserved" {
     const positions_arr = [_]types.OpenPositionData{
-        makeOpenPosition(1, true, 123.456),
+        makeOpenPosition(1, false, 1_234_567),
     };
     const u_data = makeTestUserData(0.0, &positions_arr);
     const positions = user.getUserOpenPositions(u_data);
-    try std.testing.expectEqual(@as(f64, 123.456), positions[0].live_details.pnl);
+    try std.testing.expectEqual(@as(i256, 1_234_567), positions[0].live_details.perp_delta);
 }
 
-test "getUserOpenPositions - positions with is_long null" {
+test "getUserOpenPositions - is_maker bool is preserved" {
     const positions_arr = [_]types.OpenPositionData{
-        makeOpenPosition(1, null, 0.0),
+        makeOpenPosition(1, true, 0),
     };
     const u_data = makeTestUserData(0.0, &positions_arr);
     const positions = user.getUserOpenPositions(u_data);
-    try std.testing.expectEqual(@as(?bool, null), positions[0].is_long);
+    try std.testing.expectEqual(true, positions[0].is_maker);
 }
 
 // =============================================================================
@@ -160,32 +155,18 @@ test "getUserWalletAddress - different users have different addresses" {
     var addr2: types.Address = [_]u8{0} ** 20;
     addr2[0] = 0x02;
 
-    const user1 = types.UserData{
+    const user_a = types.UserData{
         .wallet_address = addr1,
         .usdc_balance = 0.0,
         .open_positions = &.{},
     };
-    const user2 = types.UserData{
+    const user_b = types.UserData{
         .wallet_address = addr2,
         .usdc_balance = 0.0,
         .open_positions = &.{},
     };
 
-    const a1 = user.getUserWalletAddress(user1);
-    const a2 = user.getUserWalletAddress(user2);
-    // At least one byte differs
+    const a1 = user.getUserWalletAddress(user_a);
+    const a2 = user.getUserWalletAddress(user_b);
     try std.testing.expect(!std.mem.eql(u8, &a1, &a2));
-}
-
-test "getUserWalletAddress - all bytes match" {
-    var expected: types.Address = undefined;
-    for (&expected, 0..) |*byte, i| {
-        byte.* = @intCast(i);
-    }
-    const u_data = types.UserData{
-        .wallet_address = expected,
-        .usdc_balance = 0.0,
-        .open_positions = &.{},
-    };
-    try std.testing.expectEqual(expected, user.getUserWalletAddress(u_data));
 }

@@ -10,12 +10,12 @@ pub const TriggerType = enum {
 pub const TriggerAction = struct {
     trigger_type: TriggerType,
     position_id: u256,
-    perp_id: [32]u8,
+    perp: [20]u8,
     trigger_price: f64,
 };
 
 pub const ManagedPosition = struct {
-    perp_id: [32]u8,
+    perp: [20]u8,
     position_id: u256,
     is_long: bool,
     is_maker: bool,
@@ -114,7 +114,7 @@ pub const PositionManager = struct {
                     try triggered.append(self.allocator, .{
                         .trigger_type = .stop_loss,
                         .position_id = pos.position_id,
-                        .perp_id = pos.perp_id,
+                        .perp = pos.perp,
                         .trigger_price = sl,
                     });
                     continue; // Don't check other triggers if stop loss hit
@@ -128,7 +128,7 @@ pub const PositionManager = struct {
                     try triggered.append(self.allocator, .{
                         .trigger_type = .take_profit,
                         .position_id = pos.position_id,
-                        .perp_id = pos.perp_id,
+                        .perp = pos.perp,
                         .trigger_price = tp,
                     });
                     continue;
@@ -142,7 +142,7 @@ pub const PositionManager = struct {
                     try triggered.append(self.allocator, .{
                         .trigger_type = .trailing_stop,
                         .position_id = pos.position_id,
-                        .perp_id = pos.perp_id,
+                        .perp = pos.perp,
                         .trigger_price = tsp,
                     });
                 }

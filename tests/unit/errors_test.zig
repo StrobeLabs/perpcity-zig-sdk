@@ -10,7 +10,7 @@ test "getErrorDebugInfo - InvalidMargin is a user_error" {
     const info = errors.getErrorDebugInfo(error.InvalidMargin);
     try std.testing.expect(info != null);
     try std.testing.expectEqual(errors.ErrorCategory.user_error, info.?.category);
-    try std.testing.expectEqual(errors.ErrorSource.perp_manager, info.?.source);
+    try std.testing.expectEqual(errors.ErrorSource.perp, info.?.source);
     try std.testing.expectEqual(false, info.?.can_retry);
 }
 
@@ -25,12 +25,12 @@ test "getErrorDebugInfo - MarginMustBePositive is a user_error" {
     const info = errors.getErrorDebugInfo(error.MarginMustBePositive);
     try std.testing.expect(info != null);
     try std.testing.expectEqual(errors.ErrorCategory.user_error, info.?.category);
-    try std.testing.expectEqual(errors.ErrorSource.perp_manager, info.?.source);
+    try std.testing.expectEqual(errors.ErrorSource.perp, info.?.source);
     try std.testing.expectEqual(false, info.?.can_retry);
 }
 
-test "getErrorDebugInfo - LeverageMustBePositive is a user_error" {
-    const info = errors.getErrorDebugInfo(error.LeverageMustBePositive);
+test "getErrorDebugInfo - PerpDeltaMustBeNonZero is a user_error" {
+    const info = errors.getErrorDebugInfo(error.PerpDeltaMustBeNonZero);
     try std.testing.expect(info != null);
     try std.testing.expectEqual(errors.ErrorCategory.user_error, info.?.category);
     try std.testing.expectEqual(false, info.?.can_retry);
@@ -84,7 +84,7 @@ test "getErrorDebugInfo - PerpNotFound is a config_error" {
     const info = errors.getErrorDebugInfo(error.PerpNotFound);
     try std.testing.expect(info != null);
     try std.testing.expectEqual(errors.ErrorCategory.config_error, info.?.category);
-    try std.testing.expectEqual(errors.ErrorSource.perp_manager, info.?.source);
+    try std.testing.expectEqual(errors.ErrorSource.perp_factory, info.?.source);
     try std.testing.expectEqual(false, info.?.can_retry);
 }
 
@@ -92,7 +92,7 @@ test "getErrorDebugInfo - ModuleAddressRequired is a config_error" {
     const info = errors.getErrorDebugInfo(error.ModuleAddressRequired);
     try std.testing.expect(info != null);
     try std.testing.expectEqual(errors.ErrorCategory.config_error, info.?.category);
-    try std.testing.expectEqual(errors.ErrorSource.perp_manager, info.?.source);
+    try std.testing.expectEqual(errors.ErrorSource.perp_factory, info.?.source);
     try std.testing.expectEqual(false, info.?.can_retry);
 }
 
@@ -139,13 +139,11 @@ test "user_errors are never retryable" {
         error.InvalidMargin,
         error.InvalidLevX96,
         error.MarginMustBePositive,
-        error.LeverageMustBePositive,
+        error.PerpDeltaMustBeNonZero,
     };
     for (user_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| {
-            try std.testing.expectEqual(false, i.can_retry);
-        }
+        if (info) |i| try std.testing.expectEqual(false, i.can_retry);
     }
 }
 
@@ -156,9 +154,7 @@ test "state_errors are retryable" {
     };
     for (state_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| {
-            try std.testing.expectEqual(true, i.can_retry);
-        }
+        if (info) |i| try std.testing.expectEqual(true, i.can_retry);
     }
 }
 
@@ -169,9 +165,7 @@ test "system_errors are retryable" {
     };
     for (system_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| {
-            try std.testing.expectEqual(true, i.can_retry);
-        }
+        if (info) |i| try std.testing.expectEqual(true, i.can_retry);
     }
 }
 
@@ -182,9 +176,7 @@ test "config_errors are not retryable" {
     };
     for (config_errors) |err| {
         const info = errors.getErrorDebugInfo(err);
-        if (info) |i| {
-            try std.testing.expectEqual(false, i.can_retry);
-        }
+        if (info) |i| try std.testing.expectEqual(false, i.can_retry);
     }
 }
 
@@ -193,7 +185,6 @@ test "config_errors are not retryable" {
 // =============================================================================
 
 test "ErrorCategory enum has expected variants" {
-    // Just ensure all variants are accessible
     const cats = [_]errors.ErrorCategory{
         .user_error,
         .state_error,
@@ -205,9 +196,10 @@ test "ErrorCategory enum has expected variants" {
 
 test "ErrorSource enum has expected variants" {
     const sources = [_]errors.ErrorSource{
-        .perp_manager,
+        .perp,
+        .perp_factory,
         .pool_manager,
         .unknown,
     };
-    try std.testing.expectEqual(@as(usize, 3), sources.len);
+    try std.testing.expectEqual(@as(usize, 4), sources.len);
 }

@@ -1,55 +1,188 @@
 const std = @import("std");
+const types = @import("types.zig");
 
 // =============================================================================
-// Event types matching the PerpManager contract events
+// Event types matching the perpcity-contracts v0.1.0 Perp + PerpFactory events.
 // =============================================================================
-
-pub const PositionOpenedEvent = struct {
-    perp_id: [32]u8,
-    pos_id: u256,
-    is_maker: bool,
-    sqrt_price_x96: u256,
-    long_oi: u128,
-    short_oi: u128,
+//
+// SwapResult is the per-swap delta block reported by taker events.
+// Mirror of `struct SwapResult` in SharedStructs.sol.
+pub const SwapResult = struct {
+    /// BalanceDelta packed as int256: amount0 in high 128 bits, amount1 in low 128 bits.
+    delta: i256,
+    amm_price: u256,
+    total_fee_amt: i256,
+    lp_fee_amt: u256,
+    protocol_fee_amt: u256,
+    creator_fee_amt: u256,
+    insurance_fee_amt: u256,
 };
 
-pub const PositionClosedEvent = struct {
-    perp_id: [32]u8,
+pub const PerpCreatedEvent = struct {
+    perp: types.Address,
+    pool_id: types.Bytes32,
+    modules: types.Modules,
+    initial_index: u256,
+    ema_window: u24,
+    protocol_fee: u256,
+    sqrt_price_x96: u256,
+    tick: i24,
+    owner: types.Address,
+};
+
+pub const MakerOpenedEvent = struct {
     pos_id: u256,
-    was_maker: bool,
-    was_liquidated: bool,
-    was_partial_close: bool,
+};
+
+pub const MakerAdjustedEvent = struct {
+    pos_id: u256,
+    funding: i256,
+    long_util_fees: u256,
+    short_util_fees: u256,
+    lp_fees: u256,
+};
+
+pub const MakerClosedEvent = struct {
+    pos_id: u256,
+    funding: i256,
+    long_util_fees: u256,
+    short_util_fees: u256,
+    lp_fees: u256,
+    liq_fee: u256,
+    is_liquidation: bool,
+};
+
+pub const MakerConvertedEvent = struct {
+    pos_id: u256,
+    funding: i256,
+    long_util_fees: u256,
+    short_util_fees: u256,
+    lp_fees: u256,
+    liq_fee: u256,
+    is_liquidation: bool,
+};
+
+pub const MakerBackstoppedEvent = struct {
+    pos_id: u256,
+    margin_in: u128,
+    pos_recipient: types.Address,
+    funding: i256,
+    long_util_fees: u256,
+    short_util_fees: u256,
+    lp_fees: u256,
+};
+
+pub const TakerOpenedEvent = struct {
+    pos_id: u256,
+    sr: SwapResult,
+};
+
+pub const TakerAdjustedEvent = struct {
+    pos_id: u256,
+    sr: SwapResult,
+    funding: i256,
+    util_fees: u256,
+};
+
+pub const TakerClosedEvent = struct {
+    pos_id: u256,
+    sr: SwapResult,
+    funding: i256,
+    util_fees: u256,
+    liq_fee: u256,
+    is_liquidation: bool,
+};
+
+pub const TakerBackstoppedEvent = struct {
+    pos_id: u256,
+    margin_in: u128,
+    pos_recipient: types.Address,
+    funding: i256,
+    util_fees: u256,
+};
+
+pub const DonatedEvent = struct {
+    donor: types.Address,
+    amount: u128,
+    bad_debt: u128,
+    insurance: u80,
+};
+
+pub const OpenInterestUpdatedEvent = struct {
+    oi: types.OpenInterest,
+};
+
+pub const CapacityUpdatedEvent = struct {
+    cap: types.Capacity,
 };
 
 pub const IndexUpdatedEvent = struct {
     index: u256,
 };
 
-pub const PerpCreatedEvent = struct {
-    perp_id: [32]u8,
-};
-
 pub const EventType = enum {
-    position_opened,
-    position_closed,
-    index_updated,
     perp_created,
+    maker_opened,
+    maker_adjusted,
+    maker_closed,
+    maker_converted,
+    maker_backstopped,
+    taker_opened,
+    taker_adjusted,
+    taker_closed,
+    taker_backstopped,
+    donated,
+    open_interest_updated,
+    capacity_updated,
+    index_updated,
     new_block,
 };
 
 // =============================================================================
-// Pre-computed event topic hashes (keccak256 of event signature)
+// Pre-computed event topic hashes (keccak256 of canonical event signature)
 // =============================================================================
 
 pub const Topics = struct {
-    pub const POSITION_OPENED: [32]u8 = computeTopicHash("PositionOpened(bytes32,uint256,bool)");
-    pub const POSITION_CLOSED: [32]u8 = computeTopicHash("PositionClosed(bytes32,uint256)");
-    pub const PERP_CREATED: [32]u8 = computeTopicHash("PerpCreated(bytes32)");
+    pub const PERP_CREATED: [32]u8 = computeTopicHash(
+        "PerpCreated(address,bytes32,(address,address,address,address,address,address),uint256,uint24,uint256,uint160,int24,address,string,string,string)",
+    );
+
+    pub const MAKER_OPENED: [32]u8 = computeTopicHash("MakerOpened(uint256)");
+    pub const MAKER_ADJUSTED: [32]u8 = computeTopicHash(
+        "MakerAdjusted(uint256,int256,uint256,uint256,uint256)",
+    );
+    pub const MAKER_CLOSED: [32]u8 = computeTopicHash(
+        "MakerClosed(uint256,int256,uint256,uint256,uint256,uint256,bool)",
+    );
+    pub const MAKER_CONVERTED: [32]u8 = computeTopicHash(
+        "MakerConverted(uint256,int256,uint256,uint256,uint256,uint256,bool)",
+    );
+    pub const MAKER_BACKSTOPPED: [32]u8 = computeTopicHash(
+        "MakerBackstopped(uint256,uint128,address,int256,uint256,uint256,uint256)",
+    );
+
+    pub const TAKER_OPENED: [32]u8 = computeTopicHash(
+        "TakerOpened(uint256,(int256,uint256,int256,uint256,uint256,uint256,uint256))",
+    );
+    pub const TAKER_ADJUSTED: [32]u8 = computeTopicHash(
+        "TakerAdjusted(uint256,(int256,uint256,int256,uint256,uint256,uint256,uint256),int256,uint256)",
+    );
+    pub const TAKER_CLOSED: [32]u8 = computeTopicHash(
+        "TakerClosed(uint256,(int256,uint256,int256,uint256,uint256,uint256,uint256),int256,uint256,uint256,bool)",
+    );
+    pub const TAKER_BACKSTOPPED: [32]u8 = computeTopicHash(
+        "TakerBackstopped(uint256,uint128,address,int256,uint256)",
+    );
+
+    pub const DONATED: [32]u8 = computeTopicHash("Donated(address,uint128,uint128,uint80)");
+    pub const OPEN_INTEREST_UPDATED: [32]u8 = computeTopicHash("OpenInterestUpdated((uint128,uint128))");
+    pub const CAPACITY_UPDATED: [32]u8 = computeTopicHash("CapacityUpdated((uint128,uint128))");
+
     pub const INDEX_UPDATED: [32]u8 = computeTopicHash("IndexUpdated(uint256)");
 
     /// Compute the keccak256 hash of an event signature at compile time.
     pub fn computeTopicHash(comptime sig: []const u8) [32]u8 {
-        @setEvalBranchQuota(10000);
+        @setEvalBranchQuota(50_000);
         var out: [32]u8 = undefined;
         std.crypto.hash.sha3.Keccak256.hash(sig, &out, .{});
         return out;
@@ -60,13 +193,11 @@ pub const Topics = struct {
 // Subscription registry
 // =============================================================================
 
-/// A subscription entry in the registry.
 pub const Subscription = struct {
     id: u64,
     event_type: EventType,
-    /// Optional filter: only match events for this perp ID.
-    perp_id_filter: ?[32]u8 = null,
-    /// Whether this subscription is active.
+    /// Optional filter: only match events emitted by this Perp market.
+    perp_filter: ?types.Address = null,
     active: bool = true,
 };
 
@@ -88,14 +219,14 @@ pub const EventRegistry = struct {
     }
 
     /// Register a subscription. Returns the subscription ID.
-    pub fn subscribe(self: *EventRegistry, event_type: EventType, perp_id_filter: ?[32]u8) !u64 {
+    pub fn subscribe(self: *EventRegistry, event_type: EventType, perp_filter: ?types.Address) !u64 {
         const id = self.next_id;
         self.next_id += 1;
 
         try self.subscriptions.put(id, .{
             .id = id,
             .event_type = event_type,
-            .perp_id_filter = perp_id_filter,
+            .perp_filter = perp_filter,
             .active = true,
         });
 
@@ -103,7 +234,6 @@ pub const EventRegistry = struct {
     }
 
     /// Unsubscribe by ID. Returns true if the subscription was active and is now deactivated.
-    /// Returns false if the ID does not exist or the subscription was already inactive.
     pub fn unsubscribe(self: *EventRegistry, id: u64) bool {
         if (self.subscriptions.getPtr(id)) |sub| {
             if (sub.active) {
@@ -114,38 +244,32 @@ pub const EventRegistry = struct {
         return false;
     }
 
-    /// Get count of active subscriptions matching an event type and optional perp_id.
-    pub fn matchingCount(self: *const EventRegistry, event_type: EventType, perp_id: ?[32]u8) usize {
+    /// Get count of active subscriptions matching an event type and optional perp address.
+    pub fn matchingCount(self: *const EventRegistry, event_type: EventType, perp: ?types.Address) usize {
         var count: usize = 0;
         var iter = self.subscriptions.valueIterator();
         while (iter.next()) |sub| {
             if (!sub.active) continue;
             if (sub.event_type != event_type) continue;
 
-            // If the subscription has a perp_id filter, check it matches.
-            if (sub.perp_id_filter) |filter| {
-                if (perp_id) |pid| {
-                    if (std.mem.eql(u8, &filter, &pid)) {
+            if (sub.perp_filter) |filter| {
+                if (perp) |p| {
+                    if (std.mem.eql(u8, &filter, &p)) {
                         count += 1;
                     }
                 }
-                // If no perp_id was provided but subscription has a filter, skip.
             } else {
-                // No filter on subscription -- matches any perp_id.
                 count += 1;
             }
         }
         return count;
     }
 
-    /// Get total active subscription count.
     pub fn activeCount(self: *const EventRegistry) usize {
         var count: usize = 0;
         var iter = self.subscriptions.valueIterator();
         while (iter.next()) |sub| {
-            if (sub.active) {
-                count += 1;
-            }
+            if (sub.active) count += 1;
         }
         return count;
     }
@@ -161,34 +285,52 @@ pub const EventRegistry = struct {
 
 /// Identify event type from a log topic (topic0).
 pub fn identifyEvent(topic0: [32]u8) ?EventType {
-    if (std.mem.eql(u8, &topic0, &Topics.POSITION_OPENED)) return .position_opened;
-    if (std.mem.eql(u8, &topic0, &Topics.POSITION_CLOSED)) return .position_closed;
     if (std.mem.eql(u8, &topic0, &Topics.PERP_CREATED)) return .perp_created;
+    if (std.mem.eql(u8, &topic0, &Topics.MAKER_OPENED)) return .maker_opened;
+    if (std.mem.eql(u8, &topic0, &Topics.MAKER_ADJUSTED)) return .maker_adjusted;
+    if (std.mem.eql(u8, &topic0, &Topics.MAKER_CLOSED)) return .maker_closed;
+    if (std.mem.eql(u8, &topic0, &Topics.MAKER_CONVERTED)) return .maker_converted;
+    if (std.mem.eql(u8, &topic0, &Topics.MAKER_BACKSTOPPED)) return .maker_backstopped;
+    if (std.mem.eql(u8, &topic0, &Topics.TAKER_OPENED)) return .taker_opened;
+    if (std.mem.eql(u8, &topic0, &Topics.TAKER_ADJUSTED)) return .taker_adjusted;
+    if (std.mem.eql(u8, &topic0, &Topics.TAKER_CLOSED)) return .taker_closed;
+    if (std.mem.eql(u8, &topic0, &Topics.TAKER_BACKSTOPPED)) return .taker_backstopped;
+    if (std.mem.eql(u8, &topic0, &Topics.DONATED)) return .donated;
+    if (std.mem.eql(u8, &topic0, &Topics.OPEN_INTEREST_UPDATED)) return .open_interest_updated;
+    if (std.mem.eql(u8, &topic0, &Topics.CAPACITY_UPDATED)) return .capacity_updated;
     if (std.mem.eql(u8, &topic0, &Topics.INDEX_UPDATED)) return .index_updated;
     return null;
 }
 
 // =============================================================================
-// Internal tests (run with `zig test src/events.zig`)
+// Internal tests
 // =============================================================================
 
 test "Topics are 32-byte non-zero hashes" {
-    // Each topic should be a 32-byte hash and not all zeros.
     const zero = [_]u8{0} ** 32;
-    try std.testing.expect(!std.mem.eql(u8, &Topics.POSITION_OPENED, &zero));
-    try std.testing.expect(!std.mem.eql(u8, &Topics.POSITION_CLOSED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.PERP_CREATED, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &Topics.MAKER_OPENED, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &Topics.TAKER_OPENED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.INDEX_UPDATED, &zero));
 }
 
 test "All topic hashes are distinct" {
     const topics = [_][32]u8{
-        Topics.POSITION_OPENED,
-        Topics.POSITION_CLOSED,
         Topics.PERP_CREATED,
+        Topics.MAKER_OPENED,
+        Topics.MAKER_ADJUSTED,
+        Topics.MAKER_CLOSED,
+        Topics.MAKER_CONVERTED,
+        Topics.MAKER_BACKSTOPPED,
+        Topics.TAKER_OPENED,
+        Topics.TAKER_ADJUSTED,
+        Topics.TAKER_CLOSED,
+        Topics.TAKER_BACKSTOPPED,
+        Topics.DONATED,
+        Topics.OPEN_INTEREST_UPDATED,
+        Topics.CAPACITY_UPDATED,
         Topics.INDEX_UPDATED,
     };
-    // Check all pairs are distinct.
     for (0..topics.len) |i| {
         for ((i + 1)..topics.len) |j| {
             try std.testing.expect(!std.mem.eql(u8, &topics[i], &topics[j]));
@@ -196,10 +338,22 @@ test "All topic hashes are distinct" {
     }
 }
 
+test "MakerOpened topic equals keccak256(MakerOpened(uint256))" {
+    const expected = Topics.computeTopicHash("MakerOpened(uint256)");
+    try std.testing.expectEqualSlices(u8, &expected, &Topics.MAKER_OPENED);
+}
+
+test "TakerOpened topic equals canonical signature hash" {
+    const expected = Topics.computeTopicHash(
+        "TakerOpened(uint256,(int256,uint256,int256,uint256,uint256,uint256,uint256))",
+    );
+    try std.testing.expectEqualSlices(u8, &expected, &Topics.TAKER_OPENED);
+}
+
 test "identifyEvent returns correct event type for each topic" {
-    try std.testing.expectEqual(EventType.position_opened, identifyEvent(Topics.POSITION_OPENED).?);
-    try std.testing.expectEqual(EventType.position_closed, identifyEvent(Topics.POSITION_CLOSED).?);
     try std.testing.expectEqual(EventType.perp_created, identifyEvent(Topics.PERP_CREATED).?);
+    try std.testing.expectEqual(EventType.maker_opened, identifyEvent(Topics.MAKER_OPENED).?);
+    try std.testing.expectEqual(EventType.taker_opened, identifyEvent(Topics.TAKER_OPENED).?);
     try std.testing.expectEqual(EventType.index_updated, identifyEvent(Topics.INDEX_UPDATED).?);
 }
 
@@ -215,20 +369,16 @@ test "EventRegistry subscribe and unsubscribe" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id1 = try registry.subscribe(.position_opened, null);
-    const id2 = try registry.subscribe(.position_closed, null);
+    const id1 = try registry.subscribe(.maker_opened, null);
+    const id2 = try registry.subscribe(.taker_opened, null);
 
     try std.testing.expect(id1 != id2);
     try std.testing.expectEqual(@as(usize, 2), registry.activeCount());
 
-    // Unsubscribe the first one.
     try std.testing.expect(registry.unsubscribe(id1));
     try std.testing.expectEqual(@as(usize, 1), registry.activeCount());
 
-    // Unsubscribing again returns false.
     try std.testing.expect(!registry.unsubscribe(id1));
-
-    // Unsubscribe non-existent ID.
     try std.testing.expect(!registry.unsubscribe(9999));
 }
 
@@ -236,60 +386,28 @@ test "EventRegistry matchingCount without filter" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    _ = try registry.subscribe(.position_opened, null);
-    _ = try registry.subscribe(.position_opened, null);
-    _ = try registry.subscribe(.position_closed, null);
+    _ = try registry.subscribe(.maker_opened, null);
+    _ = try registry.subscribe(.maker_opened, null);
+    _ = try registry.subscribe(.taker_opened, null);
 
-    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.position_opened, null));
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_closed, null));
+    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.maker_opened, null));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.taker_opened, null));
     try std.testing.expectEqual(@as(usize, 0), registry.matchingCount(.index_updated, null));
 }
 
-test "EventRegistry matchingCount with perp_id filter" {
+test "EventRegistry matchingCount with perp filter" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const perp_a = [_]u8{0xAA} ** 32;
-    const perp_b = [_]u8{0xBB} ** 32;
+    const perp_a: types.Address = [_]u8{0xAA} ** 20;
+    const perp_b: types.Address = [_]u8{0xBB} ** 20;
 
-    // One subscription for perp_a, one with no filter.
-    _ = try registry.subscribe(.position_opened, perp_a);
-    _ = try registry.subscribe(.position_opened, null);
+    _ = try registry.subscribe(.maker_opened, perp_a);
+    _ = try registry.subscribe(.maker_opened, null);
 
-    // Querying with perp_a should match both (filtered + unfiltered).
-    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.position_opened, perp_a));
-
-    // Querying with perp_b should match only the unfiltered one.
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, perp_b));
-
-    // Querying with null perp_id should match only the unfiltered one
-    // (the filtered subscription requires a perp_id to match).
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, null));
-}
-
-test "EventRegistry activeCount tracks correctly after subscribe and unsubscribe" {
-    var registry = EventRegistry.init(std.testing.allocator);
-    defer registry.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), registry.activeCount());
-
-    const id1 = try registry.subscribe(.position_opened, null);
-    try std.testing.expectEqual(@as(usize, 1), registry.activeCount());
-
-    const id2 = try registry.subscribe(.index_updated, null);
-    try std.testing.expectEqual(@as(usize, 2), registry.activeCount());
-
-    const id3 = try registry.subscribe(.perp_created, null);
-    try std.testing.expectEqual(@as(usize, 3), registry.activeCount());
-
-    _ = registry.unsubscribe(id2);
-    try std.testing.expectEqual(@as(usize, 2), registry.activeCount());
-
-    _ = registry.unsubscribe(id1);
-    try std.testing.expectEqual(@as(usize, 1), registry.activeCount());
-
-    _ = registry.unsubscribe(id3);
-    try std.testing.expectEqual(@as(usize, 0), registry.activeCount());
+    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.maker_opened, perp_a));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, perp_b));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, null));
 }
 
 test "computeTopicHash is deterministic" {

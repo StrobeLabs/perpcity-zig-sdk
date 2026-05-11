@@ -6,7 +6,8 @@ pub const ErrorCategory = enum {
 };
 
 pub const ErrorSource = enum {
-    perp_manager,
+    perp,
+    perp_factory,
     pool_manager,
     unknown,
 };
@@ -19,7 +20,6 @@ pub const SdkError = error{
     PriceImpactTooHigh,
     SwapReverted,
     ZeroSizePosition,
-    MakerPositionLocked,
     PositionDoesNotExist,
     PerpNotFound,
 
@@ -30,9 +30,10 @@ pub const SdkError = error{
     ValueTooLarge,
     MarginRatioMustBePositive,
     MarginMustBePositive,
-    LeverageMustBePositive,
+    PerpDeltaMustBeNonZero,
     InvalidTickRange,
     InvalidPriceRange,
+    EmaWindowTooLow,
 
     // RPC
     RpcError,
@@ -58,10 +59,10 @@ pub fn getErrorDebugInfo(err: SdkError) ?ErrorDebugInfo {
         error.InvalidMargin,
         error.InvalidLevX96,
         error.MarginMustBePositive,
-        error.LeverageMustBePositive,
+        error.PerpDeltaMustBeNonZero,
         => .{
             .category = .user_error,
-            .source = .perp_manager,
+            .source = .perp,
             .can_retry = false,
         },
         error.PriceImpactTooHigh,
@@ -82,7 +83,7 @@ pub fn getErrorDebugInfo(err: SdkError) ?ErrorDebugInfo {
         error.ModuleAddressRequired,
         => .{
             .category = .config_error,
-            .source = .perp_manager,
+            .source = .perp_factory,
             .can_retry = false,
         },
         else => null,
