@@ -3,8 +3,9 @@ const std = @import("std");
 /// Anvil process manager for local EVM integration testing.
 ///
 /// Spawns an Anvil instance as a child process on a configurable port, waits
-/// for it to print "Listening on" on stderr, and shuts the process down on
-/// `stop()`. Designed for short-lived integration tests against a local node.
+/// for it to print "Listening on" on stdout (Foundry 1.x logs its banner +
+/// readiness marker to stdout), and shuts the process down on `stop()`.
+/// Designed for short-lived integration tests against a local node.
 pub const AnvilProcess = struct {
     child: std.process.Child,
     rpc_url: []const u8,
@@ -84,7 +85,9 @@ pub const AnvilProcess = struct {
         self.* = undefined;
     }
 
-    /// Poll Anvil's stdout for the "Listening on" readiness message.
+    /// Poll Anvil's stdout for the "Listening on" readiness message. Uses
+    /// `posix.poll` with a short timeout between reads so the deadline is
+    /// always honored, even if Anvil hangs without producing output.
     fn waitForReady(child: *std.process.Child) bool {
         const stdout_file = child.stdout orelse return false;
 
@@ -93,14 +96,20 @@ pub const AnvilProcess = struct {
         var read_buf: [256]u8 = undefined;
 
         const deadline = std.time.nanoTimestamp() + @as(i128, STARTUP_TIMEOUT_NS);
+        const poll_timeout_ms: i32 = 100;
 
         while (std.time.nanoTimestamp() < deadline) {
-            const bytes_read = stdout_file.read(&read_buf) catch break;
+            var fds = [_]std.posix.pollfd{.{
+                .fd = stdout_file.handle,
+                .events = std.posix.POLL.IN,
+                .revents = 0,
+            }};
+            const ready = std.posix.poll(&fds, poll_timeout_ms) catch break;
+            if (ready == 0) continue;
+            if ((fds[0].revents & std.posix.POLL.IN) == 0) continue;
 
-            if (bytes_read == 0) {
-                std.Thread.sleep(10 * std.time.ns_per_ms);
-                continue;
-            }
+            const bytes_read = stdout_file.read(&read_buf) catch break;
+            if (bytes_read == 0) break; // pipe closed -- anvil exited early
 
             const copy_len = @min(bytes_read, STDERR_BUF_SIZE - total_read);
             if (copy_len > 0) {
