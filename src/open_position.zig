@@ -1,49 +1,69 @@
 const std = @import("std");
 const types = @import("types.zig");
 const context_mod = @import("context.zig");
-const perp_manager = @import("perp_manager.zig");
+const perp_contract = @import("perp_contract.zig");
 
 const PerpCityContext = context_mod.PerpCityContext;
 
-/// An open position on a PerpCity perpetual market.
+/// An open position on a PerpCity perpetual market in v0.1.0. Each `OpenPosition`
+/// is tied to a single `Perp` contract address.
 pub const OpenPosition = struct {
     ctx: *PerpCityContext,
-    perp_id: types.Bytes32,
+    perp: types.Address,
     position_id: u256,
-    is_long: ?bool,
-    is_maker: ?bool,
+    is_maker: bool,
     tx_hash: ?types.Bytes32,
 
-    pub fn closePosition(self: *const OpenPosition, params: types.ClosePositionParams) !types.ClosePositionResult {
-        return perp_manager.closePosition(self.ctx, self.perp_id, self.position_id, params);
-    }
-
     pub fn liveDetails(self: *const OpenPosition) !types.LiveDetails {
-        const data = try self.ctx.getOpenPositionData(
-            self.perp_id,
-            self.position_id,
-            self.is_long orelse false,
-            self.is_maker orelse false,
-        );
-        return data.live_details;
+        const raw = try self.ctx.getPositionRawData(self.perp, self.position_id);
+        return types.LiveDetails{
+            .margin = @as(f64, @floatFromInt(raw.margin)) / 1_000_000.0,
+            .perp_delta = raw.delta,
+            .liq_margin_ratio = raw.liq_margin_ratio,
+            .backstop_margin_ratio = raw.backstop_margin_ratio,
+        };
     }
 
-    pub fn adjustNotional(self: *const OpenPosition, usd_delta: i128, perp_limit: u128) !types.Bytes32 {
-        return perp_manager.adjustNotional(self.ctx, .{
+    pub fn adjustMaker(self: *const OpenPosition, params: types.AdjustMakerParams) !types.Bytes32 {
+        var p = params;
+        p.position_id = self.position_id;
+        return perp_contract.adjustMaker(self.ctx, self.perp, p);
+    }
+
+    pub fn adjustTaker(self: *const OpenPosition, params: types.AdjustTakerParams) !types.Bytes32 {
+        var p = params;
+        p.position_id = self.position_id;
+        return perp_contract.adjustTaker(self.ctx, self.perp, p);
+    }
+
+    pub fn liquidate(self: *const OpenPosition, fee_recipient: types.Address) !types.Bytes32 {
+        const params: types.LiquidateParams = .{
             .position_id = self.position_id,
-            .usd_delta = usd_delta,
-            .perp_limit = perp_limit,
-        });
+            .fee_recipient = fee_recipient,
+        };
+        return if (self.is_maker)
+            perp_contract.liquidateMaker(self.ctx, self.perp, params)
+        else
+            perp_contract.liquidateTaker(self.ctx, self.perp, params);
     }
 
-    pub fn adjustMargin(self: *const OpenPosition, margin_delta: i128) !types.Bytes32 {
-        return perp_manager.adjustMargin(self.ctx, .{
+    pub fn backstop(
+        self: *const OpenPosition,
+        margin_in: u128,
+        position_recipient: types.Address,
+    ) !types.Bytes32 {
+        const params: types.BackstopParams = .{
             .position_id = self.position_id,
-            .margin_delta = margin_delta,
-        });
+            .margin_in = margin_in,
+            .position_recipient = position_recipient,
+        };
+        return if (self.is_maker)
+            perp_contract.backstopMaker(self.ctx, self.perp, params)
+        else
+            perp_contract.backstopTaker(self.ctx, self.perp, params);
     }
 
-    pub fn perpIdHex(self: *const OpenPosition) [64]u8 {
-        return std.fmt.bytesToHex(self.perp_id, .lower);
+    pub fn perpHex(self: *const OpenPosition) [40]u8 {
+        return std.fmt.bytesToHex(self.perp, .lower);
     }
 };

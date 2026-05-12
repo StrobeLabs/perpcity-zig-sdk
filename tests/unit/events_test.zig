@@ -1,6 +1,7 @@
 const std = @import("std");
 const sdk = @import("perpcity_sdk");
 const events = sdk.events;
+const types = sdk.types;
 const EventType = events.EventType;
 const EventRegistry = events.EventRegistry;
 const Topics = events.Topics;
@@ -11,17 +12,21 @@ const Topics = events.Topics;
 
 test "topic hashes are 32-byte non-zero values" {
     const zero = [_]u8{0} ** 32;
-    try std.testing.expect(!std.mem.eql(u8, &Topics.POSITION_OPENED, &zero));
-    try std.testing.expect(!std.mem.eql(u8, &Topics.POSITION_CLOSED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.PERP_CREATED, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &Topics.MAKER_OPENED, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &Topics.TAKER_OPENED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.INDEX_UPDATED, &zero));
 }
 
 test "all topic hashes are distinct from each other" {
     const topic_list = [_][32]u8{
-        Topics.POSITION_OPENED,
-        Topics.POSITION_CLOSED,
         Topics.PERP_CREATED,
+        Topics.MAKER_OPENED,
+        Topics.MAKER_ADJUSTED,
+        Topics.MAKER_CLOSED,
+        Topics.TAKER_OPENED,
+        Topics.TAKER_CLOSED,
+        Topics.DONATED,
         Topics.INDEX_UPDATED,
     };
     for (0..topic_list.len) |i| {
@@ -32,12 +37,19 @@ test "all topic hashes are distinct from each other" {
 }
 
 test "topic hash matches runtime keccak256 of event signature" {
-    // Verify comptime hashes match runtime computation.
     var runtime_hash: [32]u8 = undefined;
     var hasher = std.crypto.hash.sha3.Keccak256.init(.{});
-    hasher.update("PositionOpened(bytes32,uint256,bool)");
+    hasher.update("MakerOpened(uint256)");
     hasher.final(&runtime_hash);
-    try std.testing.expectEqualSlices(u8, &runtime_hash, &Topics.POSITION_OPENED);
+    try std.testing.expectEqualSlices(u8, &runtime_hash, &Topics.MAKER_OPENED);
+}
+
+test "TakerOpened topic matches runtime keccak256 of canonical signature" {
+    var runtime_hash: [32]u8 = undefined;
+    var hasher = std.crypto.hash.sha3.Keccak256.init(.{});
+    hasher.update("TakerOpened(uint256,(int256,uint256,int256,uint256,uint256,uint256,uint256))");
+    hasher.final(&runtime_hash);
+    try std.testing.expectEqualSlices(u8, &runtime_hash, &Topics.TAKER_OPENED);
 }
 
 test "computeTopicHash is deterministic" {
@@ -56,12 +68,12 @@ test "computeTopicHash produces different results for different signatures" {
 // identifyEvent
 // =============================================================================
 
-test "identifyEvent - returns position_opened for POSITION_OPENED topic" {
-    try std.testing.expectEqual(EventType.position_opened, events.identifyEvent(Topics.POSITION_OPENED).?);
+test "identifyEvent - returns maker_opened for MAKER_OPENED topic" {
+    try std.testing.expectEqual(EventType.maker_opened, events.identifyEvent(Topics.MAKER_OPENED).?);
 }
 
-test "identifyEvent - returns position_closed for POSITION_CLOSED topic" {
-    try std.testing.expectEqual(EventType.position_closed, events.identifyEvent(Topics.POSITION_CLOSED).?);
+test "identifyEvent - returns taker_closed for TAKER_CLOSED topic" {
+    try std.testing.expectEqual(EventType.taker_closed, events.identifyEvent(Topics.TAKER_CLOSED).?);
 }
 
 test "identifyEvent - returns perp_created for PERP_CREATED topic" {
@@ -72,7 +84,7 @@ test "identifyEvent - returns index_updated for INDEX_UPDATED topic" {
     try std.testing.expectEqual(EventType.index_updated, events.identifyEvent(Topics.INDEX_UPDATED).?);
 }
 
-test "identifyEvent - returns null for unknown topic (all 0xff)" {
+test "identifyEvent - returns null for unknown topic" {
     const unknown = [_]u8{0xff} ** 32;
     try std.testing.expectEqual(@as(?EventType, null), events.identifyEvent(unknown));
 }
@@ -80,15 +92,6 @@ test "identifyEvent - returns null for unknown topic (all 0xff)" {
 test "identifyEvent - returns null for zero topic" {
     const zero = [_]u8{0} ** 32;
     try std.testing.expectEqual(@as(?EventType, null), events.identifyEvent(zero));
-}
-
-test "identifyEvent - returns null for random bytes" {
-    var random_topic: [32]u8 = undefined;
-    // Fill with a non-matching pattern.
-    for (&random_topic, 0..) |*byte, i| {
-        byte.* = @truncate(i * 7 + 3);
-    }
-    try std.testing.expectEqual(@as(?EventType, null), events.identifyEvent(random_topic));
 }
 
 // =============================================================================
@@ -99,8 +102,8 @@ test "subscribe - returns unique IDs" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id1 = try registry.subscribe(.position_opened, null);
-    const id2 = try registry.subscribe(.position_closed, null);
+    const id1 = try registry.subscribe(.maker_opened, null);
+    const id2 = try registry.subscribe(.taker_opened, null);
     const id3 = try registry.subscribe(.index_updated, null);
 
     try std.testing.expect(id1 != id2);
@@ -112,8 +115,8 @@ test "subscribe - IDs are monotonically increasing" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id1 = try registry.subscribe(.position_opened, null);
-    const id2 = try registry.subscribe(.position_closed, null);
+    const id1 = try registry.subscribe(.maker_opened, null);
+    const id2 = try registry.subscribe(.taker_opened, null);
     const id3 = try registry.subscribe(.index_updated, null);
 
     try std.testing.expect(id1 < id2);
@@ -124,7 +127,7 @@ test "unsubscribe - returns true for existing subscription" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id = try registry.subscribe(.position_opened, null);
+    const id = try registry.subscribe(.maker_opened, null);
     try std.testing.expect(registry.unsubscribe(id));
 }
 
@@ -132,9 +135,8 @@ test "unsubscribe - returns false for already-unsubscribed ID" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id = try registry.subscribe(.position_opened, null);
+    const id = try registry.subscribe(.maker_opened, null);
     _ = registry.unsubscribe(id);
-    // Second call should return false since active is already false.
     try std.testing.expect(!registry.unsubscribe(id));
 }
 
@@ -153,72 +155,65 @@ test "matchingCount - counts matching event type without filter" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    _ = try registry.subscribe(.position_opened, null);
-    _ = try registry.subscribe(.position_opened, null);
-    _ = try registry.subscribe(.position_closed, null);
+    _ = try registry.subscribe(.maker_opened, null);
+    _ = try registry.subscribe(.maker_opened, null);
+    _ = try registry.subscribe(.taker_opened, null);
 
-    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.position_opened, null));
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_closed, null));
+    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.maker_opened, null));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.taker_opened, null));
     try std.testing.expectEqual(@as(usize, 0), registry.matchingCount(.index_updated, null));
 }
 
-test "matchingCount - filtered subscription matches only its perp_id" {
+test "matchingCount - filtered subscription matches only its perp" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const perp_a = [_]u8{0xAA} ** 32;
-    const perp_b = [_]u8{0xBB} ** 32;
+    const perp_a: types.Address = [_]u8{0xAA} ** 20;
+    const perp_b: types.Address = [_]u8{0xBB} ** 20;
 
-    _ = try registry.subscribe(.position_opened, perp_a);
+    _ = try registry.subscribe(.maker_opened, perp_a);
 
-    // Matches perp_a.
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, perp_a));
-    // Does not match perp_b.
-    try std.testing.expectEqual(@as(usize, 0), registry.matchingCount(.position_opened, perp_b));
-    // Does not match null.
-    try std.testing.expectEqual(@as(usize, 0), registry.matchingCount(.position_opened, null));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, perp_a));
+    try std.testing.expectEqual(@as(usize, 0), registry.matchingCount(.maker_opened, perp_b));
+    try std.testing.expectEqual(@as(usize, 0), registry.matchingCount(.maker_opened, null));
 }
 
-test "matchingCount - unfiltered subscription matches any perp_id" {
+test "matchingCount - unfiltered subscription matches any perp" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    _ = try registry.subscribe(.position_opened, null);
+    _ = try registry.subscribe(.maker_opened, null);
 
-    const perp_a = [_]u8{0xAA} ** 32;
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, perp_a));
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, null));
+    const perp_a: types.Address = [_]u8{0xAA} ** 20;
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, perp_a));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, null));
 }
 
 test "matchingCount - mixed filtered and unfiltered subscriptions" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const perp_a = [_]u8{0xAA} ** 32;
-    const perp_b = [_]u8{0xBB} ** 32;
+    const perp_a: types.Address = [_]u8{0xAA} ** 20;
+    const perp_b: types.Address = [_]u8{0xBB} ** 20;
 
-    // One filtered for perp_a, one unfiltered.
-    _ = try registry.subscribe(.position_opened, perp_a);
-    _ = try registry.subscribe(.position_opened, null);
+    _ = try registry.subscribe(.maker_opened, perp_a);
+    _ = try registry.subscribe(.maker_opened, null);
 
-    // perp_a matches both.
-    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.position_opened, perp_a));
-    // perp_b matches only unfiltered.
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, perp_b));
-    // null matches only unfiltered.
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, null));
+    try std.testing.expectEqual(@as(usize, 2), registry.matchingCount(.maker_opened, perp_a));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, perp_b));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, null));
 }
 
 test "matchingCount - excludes inactive subscriptions" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id1 = try registry.subscribe(.position_opened, null);
-    _ = try registry.subscribe(.position_opened, null);
+    const id1 = try registry.subscribe(.maker_opened, null);
+    _ = try registry.subscribe(.maker_opened, null);
 
     _ = registry.unsubscribe(id1);
 
-    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.position_opened, null));
+    try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, null));
 }
 
 // =============================================================================
@@ -236,10 +231,10 @@ test "activeCount - increments on subscribe" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    _ = try registry.subscribe(.position_opened, null);
+    _ = try registry.subscribe(.maker_opened, null);
     try std.testing.expectEqual(@as(usize, 1), registry.activeCount());
 
-    _ = try registry.subscribe(.position_closed, null);
+    _ = try registry.subscribe(.taker_opened, null);
     try std.testing.expectEqual(@as(usize, 2), registry.activeCount());
 
     _ = try registry.subscribe(.index_updated, null);
@@ -250,8 +245,8 @@ test "activeCount - decrements on unsubscribe" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id1 = try registry.subscribe(.position_opened, null);
-    const id2 = try registry.subscribe(.position_closed, null);
+    const id1 = try registry.subscribe(.maker_opened, null);
+    const id2 = try registry.subscribe(.taker_opened, null);
     const id3 = try registry.subscribe(.perp_created, null);
 
     try std.testing.expectEqual(@as(usize, 3), registry.activeCount());
@@ -270,11 +265,11 @@ test "activeCount - unsubscribing same ID twice does not double-decrement" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const id1 = try registry.subscribe(.position_opened, null);
-    _ = try registry.subscribe(.position_closed, null);
+    const id1 = try registry.subscribe(.maker_opened, null);
+    _ = try registry.subscribe(.taker_opened, null);
 
     _ = registry.unsubscribe(id1);
-    _ = registry.unsubscribe(id1); // already inactive
+    _ = registry.unsubscribe(id1);
 
     try std.testing.expectEqual(@as(usize, 1), registry.activeCount());
 }

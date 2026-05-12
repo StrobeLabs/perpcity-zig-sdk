@@ -50,9 +50,9 @@ pub const StateCache = struct {
     fees: std.AutoHashMap([20]u8, CachedValue(CachedFees)),
     bounds: std.AutoHashMap([20]u8, CachedValue(CachedBounds)),
 
-    // Layer 3: Fast-changing (mark prices, funding)
-    mark_prices: std.AutoHashMap([32]u8, CachedValue(f64)),
-    funding_rates: std.AutoHashMap([32]u8, CachedValue(i256)),
+    // Layer 3: Fast-changing (mark prices, funding) -- keyed by Perp address.
+    mark_prices: std.AutoHashMap([20]u8, CachedValue(f64)),
+    funding_rates: std.AutoHashMap([20]u8, CachedValue(i256)),
 
     // Layer 4: User data
     usdc_balance: ?CachedValue(f64),
@@ -68,8 +68,8 @@ pub const StateCache = struct {
             .allocator = allocator,
             .fees = std.AutoHashMap([20]u8, CachedValue(CachedFees)).init(allocator),
             .bounds = std.AutoHashMap([20]u8, CachedValue(CachedBounds)).init(allocator),
-            .mark_prices = std.AutoHashMap([32]u8, CachedValue(f64)).init(allocator),
-            .funding_rates = std.AutoHashMap([32]u8, CachedValue(i256)).init(allocator),
+            .mark_prices = std.AutoHashMap([20]u8, CachedValue(f64)).init(allocator),
+            .funding_rates = std.AutoHashMap([20]u8, CachedValue(i256)).init(allocator),
             .usdc_balance = null,
             .slow_ttl = config.slow_ttl,
             .fast_ttl = config.fast_ttl,
@@ -121,14 +121,14 @@ pub const StateCache = struct {
     // Layer 3: Mark prices
     // -----------------------------------------------------------------
 
-    pub fn getMarkPrice(self: *Self, perp_id: [32]u8, now_ts: i64) ?f64 {
-        const entry = self.mark_prices.get(perp_id) orelse return null;
+    pub fn getMarkPrice(self: *Self, perp: [20]u8, now_ts: i64) ?f64 {
+        const entry = self.mark_prices.get(perp) orelse return null;
         if (!entry.isValid(now_ts)) return null;
         return entry.value;
     }
 
-    pub fn putMarkPrice(self: *Self, perp_id: [32]u8, price: f64, now_ts: i64) !void {
-        try self.mark_prices.put(perp_id, .{
+    pub fn putMarkPrice(self: *Self, perp: [20]u8, price: f64, now_ts: i64) !void {
+        try self.mark_prices.put(perp, .{
             .value = price,
             .expires_at = now_ts + self.fast_ttl,
         });
@@ -138,14 +138,14 @@ pub const StateCache = struct {
     // Layer 3: Funding rates
     // -----------------------------------------------------------------
 
-    pub fn getFundingRate(self: *Self, perp_id: [32]u8, now_ts: i64) ?i256 {
-        const entry = self.funding_rates.get(perp_id) orelse return null;
+    pub fn getFundingRate(self: *Self, perp: [20]u8, now_ts: i64) ?i256 {
+        const entry = self.funding_rates.get(perp) orelse return null;
         if (!entry.isValid(now_ts)) return null;
         return entry.value;
     }
 
-    pub fn putFundingRate(self: *Self, perp_id: [32]u8, rate: i256, now_ts: i64) !void {
-        try self.funding_rates.put(perp_id, .{
+    pub fn putFundingRate(self: *Self, perp: [20]u8, rate: i256, now_ts: i64) !void {
+        try self.funding_rates.put(perp, .{
             .value = rate,
             .expires_at = now_ts + self.fast_ttl,
         });
