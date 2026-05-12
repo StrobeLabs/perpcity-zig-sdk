@@ -79,6 +79,9 @@ pub const perp_created_event: Event = .{
         .{ .name = "tokenUri", .abi_type = .string },
     },
 };
-pub const perp_created_topic = keccak.hash(
-    "PerpCreated(address,bytes32,(address,address,address,address,address,address),uint256,uint24,uint256,uint160,int24,address,string,string,string)",
-);
+pub const perp_created_topic = blk: {
+    @setEvalBranchQuota(50_000);
+    break :blk keccak.hash(
+        "PerpCreated(address,bytes32,(address,address,address,address,address,address),uint256,uint24,uint256,uint160,int24,address,string,string,string)",
+    );
+};

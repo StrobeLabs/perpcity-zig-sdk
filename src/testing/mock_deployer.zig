@@ -7,7 +7,6 @@ const module_registry_abi = @import("../abi/module_registry_abi.zig");
 const Wallet = eth.wallet.Wallet;
 const Provider = eth.provider.Provider;
 const HttpTransport = eth.http_transport.HttpTransport;
-const contract = eth.contract;
 const AbiValue = eth.abi_encode.AbiValue;
 
 /// Concrete addresses produced by `deployAll`. Per-market `Perp` addresses are
@@ -187,9 +186,12 @@ fn deployArtifact(
 }
 
 fn deployRawBytes(wallet: *Wallet, init_code: []const u8) !types.Address {
+    // Set a generous fixed gas limit so we don't call eth_estimateGas, which
+    // anvil rejects for contract creation with a zero `to` placeholder.
     const tx_hash = try wallet.sendTransaction(.{
         .to = null,
         .data = init_code,
+        .gas_limit = 8_000_000,
     });
 
     const receipt = (try wallet.waitForReceipt(tx_hash, 10)) orelse
@@ -229,16 +231,21 @@ pub fn registerModules(
     };
 
     for (entries) |entry| {
-        _ = try contract.contractWrite(
+        const calldata = try eth.abi_encode.encodeFunctionCall(
             allocator,
-            &wallet,
-            contracts.module_registry,
             module_registry_abi.register_module_selector,
             &.{
                 .{ .uint256 = @as(u256, @intFromEnum(entry.kind)) },
                 .{ .address = entry.addr },
             },
         );
+        defer allocator.free(calldata);
+        const tx_hash = try wallet.sendTransaction(.{
+            .to = contracts.module_registry,
+            .data = calldata,
+            .gas_limit = 200_000,
+        });
+        _ = (try wallet.waitForReceipt(tx_hash, 10)) orelse return error.RegisterModuleFailed;
     }
 }
 
@@ -261,11 +268,15 @@ pub fn deploymentsFrom(contracts: DeployedContracts) types.PerpCityDeployments {
 // ---------------------------------------------------------------------------
 
 fn hexToAddress(comptime hex: *const [40]u8) [20]u8 {
-    return std.fmt.hexToBytes(20, hex) catch unreachable;
+    var out: [20]u8 = undefined;
+    _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
+    return out;
 }
 
 fn hexToKey(comptime hex: *const [64]u8) [32]u8 {
-    return std.fmt.hexToBytes(32, hex) catch unreachable;
+    var out: [32]u8 = undefined;
+    _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
+    return out;
 }
 
 // ---------------------------------------------------------------------------

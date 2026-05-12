@@ -39,3 +39,27 @@ jobs:
 
       - name: Format check
         run: zig fmt --check src/ tests/
+
+  integration-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build mock contracts
+        working-directory: tests/contracts
+        run: forge build
+
+      - name: Run integration tests
+        run: zig build integration-test
