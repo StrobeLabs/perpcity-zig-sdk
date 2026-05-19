@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-19
+
+### Note
+
+- The `v0.2.0` tag was cut before the `perpcity-contracts` v0.1.0 alignment work (PR #6) actually landed on `main`, so consumers pinning `v0.2.0` got an inconsistent snapshot. `v0.3.0` is the first published tag that actually reflects the v0.2.0 changelog entry below plus the PR #7 testing harness fixes.
+
+### Added
+
+- Integration test job wired into CI, plus testing-harness fixes for zig 0.15.2 (PR #7).
+
 ## [0.2.0] - 2026-05-11
 
 ### Changed (BREAKING)
