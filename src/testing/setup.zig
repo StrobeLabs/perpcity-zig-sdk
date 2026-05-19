@@ -20,31 +20,30 @@ pub const AnvilSetup = struct {
     context: PerpCityContext,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io) !AnvilSetup {
-        return initWithPort(allocator, AnvilProcess.DEFAULT_PORT, io);
+    /// Initialize an AnvilSetup in-place. Pass a pointer to a stack/heap-resident
+    /// `AnvilSetup` -- `init` writes through it so the embedded `PerpCityContext`
+    /// can be fixed up at its final address (its provider/transport/wallet hold
+    /// internal pointers to each other that must point at the final struct).
+    pub fn init(self: *AnvilSetup, allocator: std.mem.Allocator) !void {
+        return initWithPort(self, allocator, AnvilProcess.DEFAULT_PORT);
     }
 
-    pub fn initWithPort(allocator: std.mem.Allocator, port: u16, io: std.Io) !AnvilSetup {
-        var anvil_proc = try AnvilProcess.start(allocator, port, io);
-        errdefer anvil_proc.stop();
+    pub fn initWithPort(self: *AnvilSetup, allocator: std.mem.Allocator, port: u16) !void {
+        self.allocator = allocator;
 
-        const contracts = try mock_deployer.deployAll(allocator, anvil_proc.rpc_url);
-        try mock_deployer.registerModules(allocator, anvil_proc.rpc_url, contracts);
+        self.anvil = try AnvilProcess.start(allocator, port);
+        errdefer self.anvil.stop();
 
-        var ctx = PerpCityContext.init(
+        self.contracts = try mock_deployer.deployAll(allocator, self.anvil.rpc_url);
+        try mock_deployer.registerModules(allocator, self.anvil.rpc_url, self.contracts);
+
+        self.context = PerpCityContext.init(
             allocator,
-            anvil_proc.rpc_url,
+            self.anvil.rpc_url,
             mock_deployer.DEPLOYER_PRIVATE_KEY,
-            mock_deployer.deploymentsFrom(contracts),
+            mock_deployer.deploymentsFrom(self.contracts),
         );
-        ctx.fixPointers();
-
-        return AnvilSetup{
-            .anvil = anvil_proc,
-            .contracts = contracts,
-            .context = ctx,
-            .allocator = allocator,
-        };
+        self.context.fixPointers();
     }
 
     pub fn deinit(self: *AnvilSetup) void {

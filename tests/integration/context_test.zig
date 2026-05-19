@@ -2,20 +2,61 @@ const std = @import("std");
 const sdk = @import("perpcity_sdk");
 const types = sdk.types;
 
-// All tests in this module are placeholders. They skip via `error.SkipZigTest`
-// because they require a live Anvil node with the v0.1.0 mock stack deployed.
+// Smoke test for the integration harness: spin up Anvil, deploy the v0.1.0
+// mock stack, create a perp via the factory, and read its `modules()` back.
+// All other tests in this module are placeholders pending future work.
 
 test "getPerpConfig - returns valid Modules tuple for the deployed perp" {
-    // Verify that getPerpConfig reads `Perp.modules()` and returns the six
-    // module addresses configured at factory deployment time.
-    //
-    //   var harness = try sdk.testing.setup.AnvilSetup.init(allocator, io);
-    //   defer harness.deinit();
-    //   const perp = try sdk.perp_factory.createPerp(&harness.context, params);
-    //   const cfg = try harness.context.getPerpConfig(perp);
-    //   try std.testing.expect(!std.mem.eql(u8, &cfg.modules.beacon, &types.ZERO_ADDRESS));
-    //   try std.testing.expect(!std.mem.eql(u8, &cfg.modules.fees, &types.ZERO_ADDRESS));
-    return error.SkipZigTest;
+    if (skipIfAnvilUnavailable()) return error.SkipZigTest;
+
+    // eth.zig 0.3.0's keccak FFI requires 8-byte aligned buffers, and its
+    // receipt-parsing path leaks small allocations. Use the C allocator
+    // (8-byte aligned via malloc) so keccak doesn't segfault on aarch64, and
+    // accept that we won't catch eth.zig-internal leaks here.
+    const allocator = std.heap.c_allocator;
+
+    var harness: sdk.testing.setup.AnvilSetup = undefined;
+    try harness.init(allocator);
+    defer harness.deinit();
+
+    const perp = try sdk.perp_factory.createPerp(&harness.context, .{
+        .owner = harness.deployerAddress(),
+        .name = "ETH-PERP",
+        .symbol = "ETHP",
+        .token_uri = "",
+        .modules = harness.defaultModules(),
+        .ema_window = 60,
+        .salt = types.ZERO_BYTES32,
+    });
+
+    const cfg = try harness.context.getPerpConfig(perp);
+    try std.testing.expect(!std.mem.eql(u8, &cfg.modules.beacon, &types.ZERO_ADDRESS));
+    try std.testing.expect(!std.mem.eql(u8, &cfg.modules.fees, &types.ZERO_ADDRESS));
+    try std.testing.expect(!std.mem.eql(u8, &cfg.modules.funding, &types.ZERO_ADDRESS));
+    try std.testing.expect(!std.mem.eql(u8, &cfg.modules.margin_ratios, &types.ZERO_ADDRESS));
+    try std.testing.expect(!std.mem.eql(u8, &cfg.modules.price_impact, &types.ZERO_ADDRESS));
+    try std.testing.expect(!std.mem.eql(u8, &cfg.modules.pricing, &types.ZERO_ADDRESS));
+}
+
+/// Returns true when the runtime environment isn't capable of starting Anvil
+/// (binary missing, or its mock artifacts haven't been built). Lets a developer
+/// `zig build integration-test` without Anvil installed and have the test skip
+/// rather than hard-fail.
+fn skipIfAnvilUnavailable() bool {
+    // Anvil on PATH?
+    var which = std.process.Child.init(&.{ "anvil", "--version" }, std.testing.allocator);
+    which.stdout_behavior = .Ignore;
+    which.stderr_behavior = .Ignore;
+    which.spawn() catch return true;
+    _ = which.wait() catch return true;
+
+    // Mock artifacts present?
+    std.fs.cwd().access(
+        "tests/contracts/out/MockPerpFactory.sol/MockPerpFactory.json",
+        .{},
+    ) catch return true;
+
+    return false;
 }
 
 test "getPerpConfig - caches results so second call is faster" {
