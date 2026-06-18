@@ -43,15 +43,19 @@ test "getPerpConfig - returns valid Modules tuple for the deployed perp" {
 /// `zig build integration-test` without Anvil installed and have the test skip
 /// rather than hard-fail.
 fn skipIfAnvilUnavailable() bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+
     // Anvil on PATH?
-    var which = std.process.Child.init(&.{ "anvil", "--version" }, std.testing.allocator);
-    which.stdout_behavior = .Ignore;
-    which.stderr_behavior = .Ignore;
-    which.spawn() catch return true;
-    _ = which.wait() catch return true;
+    var which = std.process.spawn(io, .{
+        .argv = &.{ "anvil", "--version" },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return true;
+    _ = which.wait(io) catch return true;
 
     // Mock artifacts present?
-    std.fs.cwd().access(
+    std.Io.Dir.cwd().access(
+        io,
         "tests/contracts/out/MockPerpFactory.sol/MockPerpFactory.json",
         .{},
     ) catch return true;

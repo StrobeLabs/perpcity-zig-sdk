@@ -10,6 +10,9 @@ pub const AnvilProcess = struct {
     child: std.process.Child,
     rpc_url: []const u8,
     allocator: std.mem.Allocator,
+    /// Blocking `std.Io` used to drive process/file operations. Zig 0.16
+    /// threads I/O explicitly through `std.Io` rather than via free functions.
+    io: std.Io,
 
     /// Default port for Anvil when none is specified.
     pub const DEFAULT_PORT: u16 = 8546;
@@ -41,26 +44,25 @@ pub const AnvilProcess = struct {
         var port_buf: [5]u8 = undefined;
         const port_str = std.fmt.bufPrint(&port_buf, "{d}", .{port}) catch unreachable;
 
-        var child = std.process.Child.init(
-            &.{ "anvil", "--port", port_str, "--chain-id", "31337", "--block-time", "1" },
-            allocator,
-        );
-        child.stdin_behavior = .Ignore;
+        const io = std.Io.Threaded.global_single_threaded.io();
+
         // Anvil (foundry 1.x) prints its banner + "Listening on" to stdout, so
         // pipe stdout and ignore stderr. We close stdout once we've seen the
         // readiness marker so anvil doesn't deadlock on a full pipe.
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
+        var child = std.process.spawn(io, .{
+            .argv = &.{ "anvil", "--port", port_str, "--chain-id", "31337", "--block-time", "1" },
+            .stdin = .ignore,
+            .stdout = .pipe,
+            .stderr = .ignore,
+        }) catch return AnvilError.SpawnFailed;
+        errdefer child.kill(io);
 
-        child.spawn() catch return AnvilError.SpawnFailed;
-        errdefer _ = child.kill() catch {};
-
-        if (!waitForReady(&child)) {
+        if (!waitForReady(&child, io)) {
             return AnvilError.StartupTimeout;
         }
 
         if (child.stdout) |out| {
-            out.close();
+            out.close(io);
             child.stdout = null;
         }
 
@@ -70,6 +72,7 @@ pub const AnvilProcess = struct {
             .child = child,
             .rpc_url = rpc_url,
             .allocator = allocator,
+            .io = io,
         };
     }
 
@@ -80,7 +83,7 @@ pub const AnvilProcess = struct {
 
     /// Kill the Anvil process and free associated resources.
     pub fn stop(self: *AnvilProcess) void {
-        _ = self.child.kill() catch {};
+        self.child.kill(self.io);
         self.allocator.free(self.rpc_url);
         self.* = undefined;
     }
@@ -88,17 +91,20 @@ pub const AnvilProcess = struct {
     /// Poll Anvil's stdout for the "Listening on" readiness message. Uses
     /// `posix.poll` with a short timeout between reads so the deadline is
     /// always honored, even if Anvil hangs without producing output.
-    fn waitForReady(child: *std.process.Child) bool {
+    fn waitForReady(child: *std.process.Child, io: std.Io) bool {
         const stdout_file = child.stdout orelse return false;
 
         var accumulated: [STDERR_BUF_SIZE]u8 = undefined;
         var total_read: usize = 0;
         var read_buf: [256]u8 = undefined;
 
-        const deadline = std.time.nanoTimestamp() + @as(i128, STARTUP_TIMEOUT_NS);
+        // Zig 0.16 removed `std.time.nanoTimestamp()`; read the monotonic clock
+        // through `std.Io` instead.
+        const start_ns = std.Io.Clock.now(.awake, io).toNanoseconds();
+        const deadline = start_ns + @as(i96, STARTUP_TIMEOUT_NS);
         const poll_timeout_ms: i32 = 100;
 
-        while (std.time.nanoTimestamp() < deadline) {
+        while (std.Io.Clock.now(.awake, io).toNanoseconds() < deadline) {
             var fds = [_]std.posix.pollfd{.{
                 .fd = stdout_file.handle,
                 .events = std.posix.POLL.IN,
@@ -108,7 +114,7 @@ pub const AnvilProcess = struct {
             if (ready == 0) continue;
             if ((fds[0].revents & std.posix.POLL.IN) == 0) continue;
 
-            const bytes_read = stdout_file.read(&read_buf) catch break;
+            const bytes_read = std.posix.read(stdout_file.handle, &read_buf) catch break;
             if (bytes_read == 0) break; // pipe closed -- anvil exited early
 
             const copy_len = @min(bytes_read, STDERR_BUF_SIZE - total_read);

@@ -47,7 +47,7 @@ pub const PerpCityContext = struct {
         private_key: [32]u8,
         deployments: types.PerpCityDeployments,
     ) Self {
-        var transport = HttpTransport.init(allocator, rpc_url);
+        var transport = HttpTransport.init(allocator, rpc_url, eth.runtime.blockingIo());
         var provider = Provider.init(allocator, &transport);
         const wallet = Wallet.init(allocator, private_key, &provider);
 
@@ -116,7 +116,9 @@ pub const PerpCityContext = struct {
     // -----------------------------------------------------------------
 
     fn now() i64 {
-        return std.time.timestamp();
+        // Zig 0.16 removed `std.time.timestamp()`; derive unix seconds from the
+        // millisecond timestamp exposed by eth.zig's runtime helper.
+        return @divTrunc(eth.runtime.milliTimestamp(eth.runtime.blockingIo()), 1000);
     }
 
     fn getCached(self: *Self, perp: types.Address) ?types.PerpConfig {
@@ -168,12 +170,12 @@ pub const PerpCityContext = struct {
     ) !types.UserData {
         const balance = try self.fetchUsdcBalance(address);
 
-        var open_list = std.ArrayList(types.OpenPositionData).init(self.allocator);
-        defer open_list.deinit();
+        var open_list: std.ArrayList(types.OpenPositionData) = .empty;
+        defer open_list.deinit(self.allocator);
 
         for (positions) |entry| {
             const raw = try self.getPositionRawData(entry.perp, entry.position_id);
-            try open_list.append(.{
+            try open_list.append(self.allocator, .{
                 .perp = entry.perp,
                 .position_id = entry.position_id,
                 .is_maker = entry.is_maker,
@@ -186,7 +188,7 @@ pub const PerpCityContext = struct {
             });
         }
 
-        const owned_slice = try open_list.toOwnedSlice();
+        const owned_slice = try open_list.toOwnedSlice(self.allocator);
 
         return types.UserData{
             .wallet_address = address,

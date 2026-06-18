@@ -65,7 +65,12 @@ pub const ARTIFACT_DIR: []const u8 = "tests/contracts/out";
 // ---------------------------------------------------------------------------
 
 pub fn loadBytecode(allocator: std.mem.Allocator, artifact_path: []const u8) ![]const u8 {
-    const file_contents = std.fs.cwd().readFileAlloc(allocator, artifact_path, 10 * 1024 * 1024) catch {
+    const file_contents = std.Io.Dir.cwd().readFileAlloc(
+        eth.runtime.blockingIo(),
+        artifact_path,
+        allocator,
+        .limited(10 * 1024 * 1024),
+    ) catch {
         return error.ArtifactNotFound;
     };
     defer allocator.free(file_contents);
@@ -108,7 +113,7 @@ pub fn loadBytecode(allocator: std.mem.Allocator, artifact_path: []const u8) ![]
 // ---------------------------------------------------------------------------
 
 pub fn deployAll(allocator: std.mem.Allocator, rpc_url: []const u8) !DeployedContracts {
-    var transport = HttpTransport.init(allocator, rpc_url);
+    var transport = HttpTransport.init(allocator, rpc_url, eth.runtime.blockingIo());
     defer transport.deinit();
 
     var provider = Provider.init(allocator, &transport);
@@ -216,7 +221,7 @@ pub fn registerModules(
     rpc_url: []const u8,
     contracts: DeployedContracts,
 ) !void {
-    var transport = HttpTransport.init(allocator, rpc_url);
+    var transport = HttpTransport.init(allocator, rpc_url, eth.runtime.blockingIo());
     defer transport.deinit();
 
     var provider = Provider.init(allocator, &transport);
