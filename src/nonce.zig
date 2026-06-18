@@ -13,9 +13,18 @@ pub const HftNonceManager = struct {
     /// Pending (unconfirmed) transactions tracked by nonce.
     pending: std.AutoHashMap(u64, PendingTx),
 
-    /// Protects the `pending` hash map.
-    /// Uses `std.Thread.Mutex` with a spin-lock pattern.
-    mutex: std.Thread.Mutex,
+    /// Protects the `pending` hash map. `std.Io.Mutex` is a futex-based
+    /// blocking mutex: an atomic fast path, falling back to an OS futex
+    /// wait/wake only under contention.
+    mutex: std.Io.Mutex,
+
+    /// `std.Io` handle backing the `mutex` lock/unlock calls -- Zig 0.16 moved
+    /// synchronization primitives onto `std.Io`. `global_single_threaded` means
+    /// "no async worker pool", NOT single-threaded locking: in a multi-threaded
+    /// build (the default here, since callers spawn real threads) the contended
+    /// path issues real OS futex wait/wake, giving correct cross-thread mutual
+    /// exclusion for the `pending` map. Equivalent to `eth.runtime.blockingIo()`.
+    io: std.Io,
 
     pub const PendingTx = struct {
         tx_hash: [32]u8,
@@ -25,7 +34,12 @@ pub const HftNonceManager = struct {
 
     /// Acquire the mutex.
     fn spinLock(self: *HftNonceManager) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
+    }
+
+    /// Release the mutex.
+    fn unlock(self: *HftNonceManager) void {
+        self.mutex.unlock(self.io);
     }
 
     /// Initialize with a known starting nonce.
@@ -37,7 +51,8 @@ pub const HftNonceManager = struct {
         return .{
             .next_nonce = std.atomic.Value(u64).init(starting_nonce),
             .pending = std.AutoHashMap(u64, PendingTx).init(allocator),
-            .mutex = .{},
+            .mutex = .init,
+            .io = std.Io.Threaded.global_single_threaded.io(),
         };
     }
 
@@ -50,7 +65,7 @@ pub const HftNonceManager = struct {
     /// Track a submitted transaction for receipt monitoring.
     pub fn trackSubmission(self: *HftNonceManager, nonce_val: u64, tx_hash: [32]u8) !void {
         self.spinLock();
-        defer self.mutex.unlock();
+        defer self.unlock();
         try self.pending.put(nonce_val, .{
             .tx_hash = tx_hash,
             .nonce = nonce_val,
@@ -61,7 +76,7 @@ pub const HftNonceManager = struct {
     /// Mark a nonce as confirmed (remove from pending).
     pub fn confirmNonce(self: *HftNonceManager, nonce_val: u64) void {
         self.spinLock();
-        defer self.mutex.unlock();
+        defer self.unlock();
         _ = self.pending.remove(nonce_val);
     }
 
@@ -76,7 +91,7 @@ pub const HftNonceManager = struct {
         _ = self.next_nonce.cmpxchgStrong(nonce_val + 1, nonce_val, .seq_cst, .seq_cst);
 
         self.spinLock();
-        defer self.mutex.unlock();
+        defer self.unlock();
         _ = self.pending.remove(nonce_val);
     }
 
@@ -88,14 +103,14 @@ pub const HftNonceManager = struct {
         self.next_nonce.store(on_chain_nonce, .seq_cst);
 
         self.spinLock();
-        defer self.mutex.unlock();
+        defer self.unlock();
         self.pending.clearRetainingCapacity();
     }
 
     /// Get count of pending (unconfirmed) transactions.
     pub fn pendingCount(self: *HftNonceManager) usize {
         self.spinLock();
-        defer self.mutex.unlock();
+        defer self.unlock();
         return self.pending.count();
     }
 
