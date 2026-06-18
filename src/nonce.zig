@@ -13,13 +13,17 @@ pub const HftNonceManager = struct {
     /// Pending (unconfirmed) transactions tracked by nonce.
     pending: std.AutoHashMap(u64, PendingTx),
 
-    /// Protects the `pending` hash map.
-    /// Uses `std.Io.Mutex` with a spin-lock pattern.
+    /// Protects the `pending` hash map. `std.Io.Mutex` is a futex-based
+    /// blocking mutex: an atomic fast path, falling back to an OS futex
+    /// wait/wake only under contention.
     mutex: std.Io.Mutex,
 
-    /// Blocking `std.Io` used to drive the `std.Io.Mutex` lock/unlock calls.
-    /// Zig 0.16 moved synchronization primitives onto `std.Io`; this manager
-    /// runs synchronously, so it uses the single-threaded blocking `Io`.
+    /// `std.Io` handle backing the `mutex` lock/unlock calls -- Zig 0.16 moved
+    /// synchronization primitives onto `std.Io`. `global_single_threaded` means
+    /// "no async worker pool", NOT single-threaded locking: in a multi-threaded
+    /// build (the default here, since callers spawn real threads) the contended
+    /// path issues real OS futex wait/wake, giving correct cross-thread mutual
+    /// exclusion for the `pending` map. Equivalent to `eth.runtime.blockingIo()`.
     io: std.Io,
 
     pub const PendingTx = struct {
