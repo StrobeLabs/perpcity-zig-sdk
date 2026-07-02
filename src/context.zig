@@ -49,7 +49,7 @@ pub const PerpCityContext = struct {
     ) Self {
         var transport = HttpTransport.init(allocator, rpc_url, eth.runtime.blockingIo());
         var provider = Provider.init(allocator, &transport);
-        const wallet = Wallet.init(allocator, private_key, &provider);
+        const wallet = Wallet.initLocal(allocator, private_key, &provider);
 
         return Self{
             .allocator = allocator,

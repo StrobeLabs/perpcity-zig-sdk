@@ -117,7 +117,7 @@ pub fn deployAll(allocator: std.mem.Allocator, rpc_url: []const u8) !DeployedCon
     defer transport.deinit();
 
     var provider = Provider.init(allocator, &transport);
-    var wallet = Wallet.init(allocator, DEPLOYER_PRIVATE_KEY, &provider);
+    var wallet = Wallet.initLocal(allocator, DEPLOYER_PRIVATE_KEY, &provider);
 
     const usdc = try deployArtifact(allocator, &wallet, "MockUSDC", &.{});
     const fees = try deployArtifact(allocator, &wallet, "MockFees", &.{
@@ -225,7 +225,7 @@ pub fn registerModules(
     defer transport.deinit();
 
     var provider = Provider.init(allocator, &transport);
-    var wallet = Wallet.init(allocator, DEPLOYER_PRIVATE_KEY, &provider);
+    var wallet = Wallet.initLocal(allocator, DEPLOYER_PRIVATE_KEY, &provider);
 
     const entries = [_]struct { kind: module_registry_abi.Module, addr: types.Address }{
         .{ .kind = .fees, .addr = contracts.fees },
