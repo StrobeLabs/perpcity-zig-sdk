@@ -1,6 +1,6 @@
 # PerpCity Zig SDK
 
-High-performance, low-level Zig SDK for the PerpCity perpetual futures protocol on Base. Built for HFT bots and latency-sensitive trading systems.
+High-performance, low-level Zig SDK for the PerpCity perpetual futures protocol on Arbitrum. Built for HFT bots and latency-sensitive trading systems.
 
 ## Why Zig?
 
@@ -128,7 +128,7 @@ Create a `.env.local` file:
 PRIVATE_KEY=your_private_key_here
 RPC_URL=https://your-rpc-url.com
 
-# Contract addresses (Base Sepolia)
+# Contract addresses (Arbitrum Sepolia)
 PERP_MANAGER_ADDRESS=0x...
 USDC_ADDRESS=0x...
 ```
@@ -139,6 +139,6 @@ MIT
 
 ## Links
 
-- [Perp City Documentation](https://docs.perpcity.io)
-- [Strobe Labs](https://strobelabs.io)
+- [Perp City Documentation](https://docs.perp.city)
+- [Perp City App](https://app.perp.city)
 - [TypeScript SDK](https://github.com/StrobeLabs/perpcity-sdk)
