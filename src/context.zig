@@ -5,17 +5,14 @@ const constants = @import("constants.zig");
 const conversions = @import("conversions.zig");
 const approve_mod = @import("approve.zig");
 const state_cache_mod = @import("state_cache.zig");
+const chain_client = @import("chain_client.zig");
 const perp_abi = @import("abi/perp_abi.zig");
 const fees_abi = @import("abi/fees_abi.zig");
 const margin_ratios_abi = @import("abi/margin_ratios_abi.zig");
 const erc20_abi = @import("abi/erc20_abi.zig");
 
-const Wallet = eth.wallet.Wallet;
-const Provider = eth.provider.Provider;
-const HttpTransport = eth.http_transport.HttpTransport;
-const contract = eth.contract;
-const AbiValue = eth.abi_encode.AbiValue;
-const AbiType = eth.abi_types.AbiType;
+const ChainClient = chain_client.ChainClient;
+const EthChainClient = chain_client.EthChainClient;
 
 /// Cache time-to-live in seconds (5 minutes).
 const CACHE_TTL_SECONDS: i64 = 300;
@@ -28,9 +25,12 @@ pub const CacheEntry = struct {
 /// Main client context for interacting with the PerpCity v0.1.0 protocol.
 pub const PerpCityContext = struct {
     allocator: std.mem.Allocator,
-    transport: HttpTransport,
-    provider: Provider,
-    wallet: Wallet,
+    /// The chain interface every read/write goes through. In production this is
+    /// backed by `eth_client`; in tests a mock is injected via `initWithClient`.
+    client: ChainClient,
+    /// The owned production client, or null when a client was injected. When
+    /// non-null, `deinit` destroys it.
+    eth_client: ?*EthChainClient,
     deployments: types.PerpCityDeployments,
     /// Approval is tracked per-perp because each Perp market is a separate
     /// ERC721 contract that holds the user's USDC allowance.
@@ -46,16 +46,15 @@ pub const PerpCityContext = struct {
         rpc_url: []const u8,
         private_key: [32]u8,
         deployments: types.PerpCityDeployments,
-    ) Self {
-        var transport = HttpTransport.init(allocator, rpc_url, eth.runtime.blockingIo());
-        var provider = Provider.init(allocator, &transport);
-        const wallet = Wallet.initLocal(allocator, private_key, &provider);
-
+    ) !Self {
+        // The EthChainClient owns the transport/provider/wallet on the heap, so
+        // their addresses stay stable no matter where this Self is moved. That
+        // is what lets us drop the old `fixPointers` hack.
+        const ec = try EthChainClient.create(allocator, rpc_url, private_key);
         return Self{
             .allocator = allocator,
-            .transport = transport,
-            .provider = provider,
-            .wallet = wallet,
+            .client = ec.client(),
+            .eth_client = ec,
             .deployments = deployments,
             .approved_perps = std.AutoHashMap(types.Address, void).init(allocator),
             .config_cache = std.AutoHashMap(types.Address, CacheEntry).init(allocator),
@@ -64,18 +63,31 @@ pub const PerpCityContext = struct {
         };
     }
 
+    /// Build a context around an already-constructed `ChainClient` (for tests
+    /// with an in-memory mock). The context does not own the client, so
+    /// `deinit` leaves it alone (`eth_client` is null).
+    pub fn initWithClient(
+        allocator: std.mem.Allocator,
+        client: ChainClient,
+        deployments: types.PerpCityDeployments,
+    ) Self {
+        return Self{
+            .allocator = allocator,
+            .client = client,
+            .eth_client = null,
+            .deployments = deployments,
+            .approved_perps = std.AutoHashMap(types.Address, void).init(allocator),
+            .config_cache = std.AutoHashMap(types.Address, CacheEntry).init(allocator),
+            .state_cache = state_cache_mod.StateCache.init(allocator, .{}),
+            .rpc_url = "",
+        };
+    }
+
     pub fn deinit(self: *Self) void {
         self.state_cache.deinit();
         self.config_cache.deinit();
         self.approved_perps.deinit();
-        self.transport.deinit();
-    }
-
-    /// Fix up internal pointers after init (provider -> transport, wallet -> provider).
-    /// Must be called after init since Zig moves invalidate pointers.
-    pub fn fixPointers(self: *Self) void {
-        self.provider.transport = &self.transport;
-        self.wallet.provider = &self.provider;
+        if (self.eth_client) |ec| ec.destroy();
     }
 
     // -----------------------------------------------------------------
@@ -83,17 +95,17 @@ pub const PerpCityContext = struct {
     // -----------------------------------------------------------------
 
     pub fn setupForTrading(self: *Self, perp: types.Address) !void {
-        const owner = try self.wallet.address();
+        const owner = try self.client.address();
 
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             self.deployments.usdc,
             erc20_abi.allowance_selector,
             &.{ .{ .address = owner }, .{ .address = perp } },
             &.{.uint256},
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
 
         const current_allowance: u256 = result[0].uint256;
         const threshold: u256 = std.math.maxInt(u256) / 2;
@@ -205,15 +217,15 @@ pub const PerpCityContext = struct {
         // Output tuple mirrors `Perp.positions(uint256)` v0.1.0:
         //   (BalanceDelta delta, uint128 margin, uint24 liqMarginRatio,
         //    uint24 backstopMarginRatio, int256 lastCumlFundingX96).
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             perp,
             perp_abi.positions_selector,
             &.{.{ .uint256 = pos_id }},
             &.{ .int256, .uint128, .uint24, .uint24, .int256 },
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
 
         return types.PositionRawData{
             .perp = perp,
@@ -227,15 +239,15 @@ pub const PerpCityContext = struct {
     }
 
     pub fn getOpenInterest(self: *Self, perp: types.Address) !types.OpenInterest {
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             perp,
             perp_abi.open_interest_selector,
             &.{},
             &.{ .uint256, .uint256 },
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
         return .{
             .long = @intCast(result[0].uint256),
             .short = @intCast(result[1].uint256),
@@ -243,15 +255,15 @@ pub const PerpCityContext = struct {
     }
 
     pub fn getCapacity(self: *Self, perp: types.Address) !types.Capacity {
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             perp,
             perp_abi.capacity_selector,
             &.{},
             &.{ .uint256, .uint256 },
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
         return .{
             .long = @intCast(result[0].uint256),
             .short = @intCast(result[1].uint256),
@@ -263,15 +275,15 @@ pub const PerpCityContext = struct {
     // -----------------------------------------------------------------
 
     fn fetchPerpConfigFromChain(self: *Self, perp: types.Address) !types.PerpConfig {
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             perp,
             perp_abi.modules_selector,
             &.{},
             &.{ .address, .address, .address, .address, .address, .address },
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
 
         return types.PerpConfig{
             .perp = perp,
@@ -287,25 +299,25 @@ pub const PerpCityContext = struct {
     }
 
     fn fetchFees(self: *Self, fees_addr: types.Address) !types.Fees {
-        const fees_res = try contract.contractRead(
+        const fees_res = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             fees_addr,
             fees_abi.fees_selector,
             &.{},
             &.{ .uint256, .uint256, .uint256 },
         );
-        defer contract.freeReturnValues(fees_res, self.allocator);
+        defer chain_client.freeReturnValues(fees_res, self.allocator);
 
-        const liq_res = try contract.contractRead(
+        const liq_res = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             fees_addr,
             fees_abi.liq_fee_selector,
             &.{},
             &.{.uint256},
         );
-        defer contract.freeReturnValues(liq_res, self.allocator);
+        defer chain_client.freeReturnValues(liq_res, self.allocator);
 
         const creator: u256 = fees_res[0].uint256;
         const insurance: u256 = fees_res[1].uint256;
@@ -329,15 +341,15 @@ pub const PerpCityContext = struct {
     }
 
     fn fetchBoundsHelper(self: *Self, mr_addr: types.Address, selector: [4]u8) !types.Bounds {
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             mr_addr,
             selector,
             &.{},
             &.{ .uint256, .uint256, .uint256 },
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
 
         const init_ratio: u256 = result[0].uint256;
         const liq_ratio: u256 = result[1].uint256;
@@ -352,15 +364,15 @@ pub const PerpCityContext = struct {
     }
 
     fn fetchMarkPrice(self: *Self, perp: types.Address) !f64 {
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             perp,
             perp_abi.pool_state_selector,
             &.{},
             &.{ .int256, .uint256, .uint256, .uint256 },
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
 
         const sqrt_price_x96: u256 = result[1].uint256;
         const price = try conversions.sqrtPriceX96ToPrice(sqrt_price_x96);
@@ -376,15 +388,15 @@ pub const PerpCityContext = struct {
     }
 
     fn fetchUsdcBalance(self: *Self, address: types.Address) !f64 {
-        const result = try contract.contractRead(
+        const result = try chain_client.readContract(
+            &self.client,
             self.allocator,
-            &self.provider,
             self.deployments.usdc,
             erc20_abi.balance_of_selector,
             &.{.{ .address = address }},
             &.{.uint256},
         );
-        defer contract.freeReturnValues(result, self.allocator);
+        defer chain_client.freeReturnValues(result, self.allocator);
 
         const raw_balance: u256 = result[0].uint256;
         // Convert via u128 intermediate to avoid LLVM aarch64 bug with u256->f64.

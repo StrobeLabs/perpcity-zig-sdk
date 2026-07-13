@@ -18,6 +18,7 @@ pub const multi_rpc = @import("multi_rpc.zig");
 pub const connection = @import("connection.zig");
 
 /// Contract interaction layer (requires eth.zig).
+pub const chain_client = @import("chain_client.zig");
 pub const context = @import("context.zig");
 pub const approve = @import("approve.zig");
 pub const nonce = @import("nonce.zig");
@@ -53,6 +54,7 @@ pub const abi = struct {
 pub const testing = struct {
     pub const anvil = @import("testing/anvil.zig");
     pub const mock_deployer = @import("testing/mock_deployer.zig");
+    pub const mock_chain_client = @import("testing/mock_chain_client.zig");
     pub const setup = @import("testing/setup.zig");
 };
 

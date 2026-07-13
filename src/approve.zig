@@ -2,9 +2,9 @@ const std = @import("std");
 const eth = @import("eth");
 const types = @import("types.zig");
 const context_mod = @import("context.zig");
+const chain_client = @import("chain_client.zig");
 const erc20_abi = @import("abi/erc20_abi.zig");
 
-const contract = eth.contract;
 const AbiValue = eth.abi_encode.AbiValue;
 
 const PerpCityContext = context_mod.PerpCityContext;
@@ -33,15 +33,16 @@ pub fn approveUsdc(
         return ApproveError.InvalidPerpAddress;
     }
 
-    const tx_hash = try contract.contractWrite(
+    const tx_hash = try chain_client.writeContract(
+        &ctx.client,
         ctx.allocator,
-        &ctx.wallet,
         ctx.deployments.usdc,
         erc20_abi.approve_selector,
         &.{ .{ .address = perp }, .{ .uint256 = amount_scaled } },
+        0,
     );
 
-    const receipt = (try ctx.wallet.waitForReceipt(tx_hash, 10)) orelse
+    const receipt = (try ctx.client.getReceipt(ctx.allocator, tx_hash, 10)) orelse
         return ApproveError.ApproveFailed;
 
     if (receipt.status != 1) return ApproveError.ApproveFailed;
