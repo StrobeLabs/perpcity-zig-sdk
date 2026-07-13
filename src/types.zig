@@ -129,6 +129,60 @@ pub const UserData = struct {
 };
 
 // ---------------------------------------------------------------------------
+// Additional read structs (mirror perpcity-contracts v0.1.0 view returns)
+// ---------------------------------------------------------------------------
+
+/// Funding rate for a perp, derived from `Rates.fundingPerDay` (an int88 scaled
+/// by 1e18 per day). Matches the TypeScript SDK `getFundingRate`: rates are
+/// surfaced as a percentage. `rate_per_day` is a percent-per-day figure and
+/// `rate_per_minute` is that divided by 1440.
+pub const FundingRate = struct {
+    /// Funding as a percent per day (raw / 1e18 * 100).
+    rate_per_day: f64,
+    /// Funding as a percent per minute (rate_per_day / 1440).
+    rate_per_minute: f64,
+    /// Raw signed `Rates.fundingPerDay`, scaled by 1e18 per day.
+    funding_per_day_raw: i256,
+};
+
+/// Maker (concentrated-liquidity) position detail from `Perp.makerDetails`.
+/// Only the leading, version-stable fields (tick range + liquidity) are
+/// exposed; the trailing fee/funding checkpoints are omitted.
+pub const MakerDetails = struct {
+    perp: Address,
+    position_id: u256,
+    tick_lower: i32,
+    tick_upper: i32,
+    liquidity: u128,
+};
+
+/// Taker position detail from `Perp.takerDetails`: the utilization-fee payment
+/// checkpoints (X96 fixed-point).
+pub const TakerDetails = struct {
+    perp: Address,
+    position_id: u256,
+    last_long_util_payments_x96: u256,
+    last_short_util_payments_x96: u256,
+};
+
+/// Market solvency state from `Perp.solvencyState`, used for bad-debt
+/// socialization. Both fields use USDC decimals.
+pub const SolvencyState = struct {
+    perp: Address,
+    bad_debt: u128,
+    total_margin: u128,
+};
+
+/// Accrued fee balances from `Perp.feeFund`. Each field is a uint80 in USDC
+/// decimals; widened to u128 for ergonomics.
+pub const FeeFund = struct {
+    perp: Address,
+    insurance: u128,
+    creator_fees: u128,
+    protocol_fees: u128,
+};
+
+// ---------------------------------------------------------------------------
 // Write call parameters (mirror SharedStructs.sol)
 // ---------------------------------------------------------------------------
 

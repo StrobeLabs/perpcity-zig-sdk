@@ -10,6 +10,7 @@ const perp_abi = @import("abi/perp_abi.zig");
 const fees_abi = @import("abi/fees_abi.zig");
 const margin_ratios_abi = @import("abi/margin_ratios_abi.zig");
 const erc20_abi = @import("abi/erc20_abi.zig");
+const beacon_abi = @import("abi/beacon_abi.zig");
 
 const ChainClient = chain_client.ChainClient;
 const EthChainClient = chain_client.EthChainClient;
@@ -268,6 +269,151 @@ pub const PerpCityContext = struct {
             .long = @intCast(result[0].uint256),
             .short = @intCast(result[1].uint256),
         };
+    }
+
+    /// Current funding rate for a perp. Decodes the full `Rates` tuple
+    /// (int88 fundingPerDay, uint64 longUtilFeePerDay, uint64 shortUtilFeePerDay,
+    /// uint40 lastTouch) but only surfaces the funding component. `fundingPerDay`
+    /// is signed and scaled by 1e18 per day; the returned percentages mirror the
+    /// TypeScript SDK `getFundingRate`.
+    pub fn getFundingRate(self: *Self, perp: types.Address) !types.FundingRate {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.rates_selector,
+            &.{},
+            &.{ .int88, .uint64, .uint64, .uint40 },
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+
+        const raw: i256 = result[0].int256;
+        // Convert via i128 to avoid the LLVM aarch64 i256->f64 crash. int88 fits
+        // comfortably in i128.
+        const raw_128: i128 = @intCast(raw);
+        const rate_per_day: f64 = @as(f64, @floatFromInt(raw_128)) / constants.F64_1E18 * 100.0;
+
+        return types.FundingRate{
+            .rate_per_day = rate_per_day,
+            .rate_per_minute = rate_per_day / 1440.0,
+            .funding_per_day_raw = raw,
+        };
+    }
+
+    /// Maker position detail from `Perp.makerDetails(posId)`. The `Maker` struct
+    /// is fully static, so decoding its leading `(int24, int24, uint128)` reads
+    /// the tick range and liquidity regardless of the trailing checkpoint fields.
+    pub fn getMakerDetails(self: *Self, perp: types.Address, pos_id: u256) !types.MakerDetails {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.maker_details_selector,
+            &.{.{ .uint256 = pos_id }},
+            &.{ .int24, .int24, .uint128 },
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+
+        return types.MakerDetails{
+            .perp = perp,
+            .position_id = pos_id,
+            .tick_lower = @intCast(result[0].int256),
+            .tick_upper = @intCast(result[1].int256),
+            .liquidity = @intCast(result[2].uint256),
+        };
+    }
+
+    /// Taker position detail from `Perp.takerDetails(posId)`: the two X96
+    /// utilization-fee payment checkpoints.
+    pub fn getTakerDetails(self: *Self, perp: types.Address, pos_id: u256) !types.TakerDetails {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.taker_details_selector,
+            &.{.{ .uint256 = pos_id }},
+            &.{ .uint256, .uint256 },
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+
+        return types.TakerDetails{
+            .perp = perp,
+            .position_id = pos_id,
+            .last_long_util_payments_x96 = result[0].uint256,
+            .last_short_util_payments_x96 = result[1].uint256,
+        };
+    }
+
+    /// Market solvency state from `Perp.solvencyState`: (uint128 badDebt,
+    /// uint128 totalMargin).
+    pub fn getSolvencyState(self: *Self, perp: types.Address) !types.SolvencyState {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.solvency_state_selector,
+            &.{},
+            &.{ .uint128, .uint128 },
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+
+        return types.SolvencyState{
+            .perp = perp,
+            .bad_debt = @intCast(result[0].uint256),
+            .total_margin = @intCast(result[1].uint256),
+        };
+    }
+
+    /// Accrued fee balances from `Perp.feeFund`: (uint80 insurance,
+    /// uint80 creatorFees, uint80 protocolFees).
+    pub fn getFeeFund(self: *Self, perp: types.Address) !types.FeeFund {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.fee_fund_selector,
+            &.{},
+            &.{ .uint80, .uint80, .uint80 },
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+
+        return types.FeeFund{
+            .perp = perp,
+            .insurance = @intCast(result[0].uint256),
+            .creator_fees = @intCast(result[1].uint256),
+            .protocol_fees = @intCast(result[2].uint256),
+        };
+    }
+
+    /// Current index value of a beacon (`IBeacon.index()`), a single uint256.
+    /// Matches the TypeScript SDK `getIndexValue`.
+    pub fn getIndexValue(self: *Self, beacon: types.Address) !u256 {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            beacon,
+            beacon_abi.index_selector,
+            &.{},
+            &.{.uint256},
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+        return result[0].uint256;
+    }
+
+    /// Time-weighted average index of a beacon over `seconds_ago`
+    /// (`IBeacon.twAvg(uint32)`), a single uint256. Matches the TypeScript SDK
+    /// `getIndexTWAP`.
+    pub fn getIndexTWAP(self: *Self, beacon: types.Address, seconds_ago: u32) !u256 {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            beacon,
+            beacon_abi.tw_avg_selector,
+            &.{.{ .uint256 = @as(u256, seconds_ago) }},
+            &.{.uint256},
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+        return result[0].uint256;
     }
 
     // -----------------------------------------------------------------

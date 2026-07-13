@@ -10,6 +10,9 @@ pub const BIGINT_1E6: u256 = 1_000_000;
 /// 1e6 as f64, for floating point conversions.
 pub const F64_1E6: f64 = 1_000_000.0;
 
+/// 1e18 as f64, for funding/utilization-rate scaling (1e18 per day).
+pub const F64_1E18: f64 = 1_000_000_000_000_000_000.0;
+
 /// Maximum safe integer for f64 conversion (~2^53).
 pub const MAX_SAFE_F64_INT: u64 = 9_007_199_254_740_992;
 
