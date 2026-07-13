@@ -137,6 +137,57 @@ test "checkTriggers - stop loss hit for long when price drops below" {
     try std.testing.expectEqual(@as(f64, 1400.0), triggers[0].trigger_price);
 }
 
+test "checkTriggersBuf - zero-alloc, same result as checkTriggers" {
+    var mgr = PositionManager.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var pos = makeLongPosition(1, 1500.0, 100.0);
+    pos.stop_loss = 1400.0;
+    try mgr.track(pos);
+
+    // Caller-owned buffer -- checkTriggersBuf never allocates.
+    var buf: [4]TriggerAction = undefined;
+    const triggers = mgr.checkTriggersBuf(1350.0, &buf);
+
+    try std.testing.expectEqual(@as(usize, 1), triggers.len);
+    try std.testing.expectEqual(TriggerType.stop_loss, triggers[0].trigger_type);
+    try std.testing.expectEqual(@as(u256, 1), triggers[0].position_id);
+    try std.testing.expectEqual(@as(f64, 1400.0), triggers[0].trigger_price);
+}
+
+test "checkTriggersBuf - truncates when the buffer is too small (no overflow)" {
+    var mgr = PositionManager.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var p1 = makeLongPosition(1, 1500.0, 100.0);
+    p1.stop_loss = 1400.0;
+    try mgr.track(p1);
+    var p2 = makeLongPosition(2, 1500.0, 100.0);
+    p2.stop_loss = 1400.0;
+    try mgr.track(p2);
+
+    // Both positions fire, but the buffer only holds one.
+    var buf: [1]TriggerAction = undefined;
+    const triggers = mgr.checkTriggersBuf(1350.0, &buf);
+    try std.testing.expectEqual(@as(usize, 1), triggers.len);
+    try std.testing.expectEqual(TriggerType.stop_loss, triggers[0].trigger_type);
+}
+
+test "checkTriggersBuf - reusable across ticks with no allocation" {
+    var mgr = PositionManager.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var pos = makeLongPosition(1, 1500.0, 100.0);
+    pos.stop_loss = 1400.0;
+    try mgr.track(pos);
+
+    var buf: [4]TriggerAction = undefined;
+    // Above the stop: nothing fires.
+    try std.testing.expectEqual(@as(usize, 0), mgr.checkTriggersBuf(1450.0, &buf).len);
+    // Below the stop: fires, reusing the same buffer.
+    try std.testing.expectEqual(@as(usize, 1), mgr.checkTriggersBuf(1350.0, &buf).len);
+}
+
 test "checkTriggers - stop loss hit for long at exact stop price" {
     var mgr = PositionManager.init(std.testing.allocator);
     defer mgr.deinit();

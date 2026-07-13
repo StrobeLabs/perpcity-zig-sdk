@@ -112,55 +112,76 @@ pub const PositionManager = struct {
     /// Check all positions against the current price and return triggered actions.
     /// The caller is responsible for executing the close transactions.
     /// The caller owns the returned slice and must free it with `self.allocator`.
+    /// Evaluate the trigger conditions for a single position, updating its
+    /// trailing high first. Returns the first trigger that fires (stop-loss
+    /// takes precedence over take-profit over trailing-stop), or null.
+    fn evaluateTrigger(pos: *ManagedPosition, current_price: f64) ?TriggerAction {
+        pos.updateTrailingHigh(current_price);
+
+        if (pos.stop_loss) |sl| {
+            const hit = if (pos.is_long) current_price <= sl else current_price >= sl;
+            if (hit) return .{
+                .trigger_type = .stop_loss,
+                .position_id = pos.position_id,
+                .perp = pos.perp,
+                .trigger_price = sl,
+            };
+        }
+
+        if (pos.take_profit) |tp| {
+            const hit = if (pos.is_long) current_price >= tp else current_price <= tp;
+            if (hit) return .{
+                .trigger_type = .take_profit,
+                .position_id = pos.position_id,
+                .perp = pos.perp,
+                .trigger_price = tp,
+            };
+        }
+
+        if (pos.trailingStopPrice()) |tsp| {
+            const hit = if (pos.is_long) current_price <= tsp else current_price >= tsp;
+            if (hit) return .{
+                .trigger_type = .trailing_stop,
+                .position_id = pos.position_id,
+                .perp = pos.perp,
+                .trigger_price = tsp,
+            };
+        }
+
+        return null;
+    }
+
+    /// Zero-allocation trigger check for the hot price-tick loop: writes fired
+    /// triggers into the caller-provided `out` and returns the filled prefix.
+    /// At most one trigger fires per tracked position, so sizing `out` to
+    /// `count()` guarantees none are dropped (a full buffer silently drops
+    /// extras). `updateTrailingHigh` still runs for every position regardless
+    /// of remaining space, so trailing state stays correct. Never allocates --
+    /// reuse one buffer across ticks.
+    pub fn checkTriggersBuf(self: *PositionManager, current_price: f64, out: []TriggerAction) []TriggerAction {
+        var n: usize = 0;
+        var it = self.positions.iterator();
+        while (it.next()) |entry| {
+            const action = evaluateTrigger(entry.value_ptr, current_price) orelse continue;
+            if (n < out.len) {
+                out[n] = action;
+                n += 1;
+            }
+        }
+        return out[0..n];
+    }
+
+    /// Allocating convenience over `checkTriggersBuf`: returns an owned slice of
+    /// the fired triggers (caller frees with `self.allocator`). Prefer
+    /// `checkTriggersBuf` with a reused buffer on the hot path -- this allocates.
     pub fn checkTriggers(self: *PositionManager, current_price: f64) ![]TriggerAction {
         var triggered: std.ArrayList(TriggerAction) = .empty;
         errdefer triggered.deinit(self.allocator);
 
         var it = self.positions.iterator();
         while (it.next()) |entry| {
-            var pos = entry.value_ptr;
-            pos.updateTrailingHigh(current_price);
-
-            // Check stop loss
-            if (pos.stop_loss) |sl| {
-                const hit = if (pos.is_long) current_price <= sl else current_price >= sl;
-                if (hit) {
-                    try triggered.append(self.allocator, .{
-                        .trigger_type = .stop_loss,
-                        .position_id = pos.position_id,
-                        .perp = pos.perp,
-                        .trigger_price = sl,
-                    });
-                    continue; // Don't check other triggers if stop loss hit
-                }
-            }
-
-            // Check take profit
-            if (pos.take_profit) |tp| {
-                const hit = if (pos.is_long) current_price >= tp else current_price <= tp;
-                if (hit) {
-                    try triggered.append(self.allocator, .{
-                        .trigger_type = .take_profit,
-                        .position_id = pos.position_id,
-                        .perp = pos.perp,
-                        .trigger_price = tp,
-                    });
-                    continue;
-                }
-            }
-
-            // Check trailing stop
-            if (pos.trailingStopPrice()) |tsp| {
-                const hit = if (pos.is_long) current_price <= tsp else current_price >= tsp;
-                if (hit) {
-                    try triggered.append(self.allocator, .{
-                        .trigger_type = .trailing_stop,
-                        .position_id = pos.position_id,
-                        .perp = pos.perp,
-                        .trigger_price = tsp,
-                    });
-                }
-            }
+            const action = evaluateTrigger(entry.value_ptr, current_price) orelse continue;
+            try triggered.append(self.allocator, action);
         }
 
         return triggered.toOwnedSlice(self.allocator);
