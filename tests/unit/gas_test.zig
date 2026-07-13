@@ -55,7 +55,7 @@ test "GasCache init - custom config" {
 // =============================================================================
 
 test "GasCache isValid - returns false when empty" {
-    const cache = GasCache.init(.{});
+    var cache = GasCache.init(.{});
     try std.testing.expect(!cache.isValid(0));
     try std.testing.expect(!cache.isValid(9999));
 }
@@ -90,7 +90,7 @@ test "GasCache isValid - returns false well past TTL" {
 // =============================================================================
 
 test "GasCache get - returns null when empty" {
-    const cache = GasCache.init(.{});
+    var cache = GasCache.init(.{});
     try std.testing.expectEqual(@as(?GasFees, null), cache.get(0));
 }
 
@@ -157,7 +157,7 @@ test "GasCache updateFromBlock - refreshed cache becomes valid again" {
 // =============================================================================
 
 test "feesForUrgency - returns null when cache is empty" {
-    const cache = GasCache.init(.{});
+    var cache = GasCache.init(.{});
     try std.testing.expectEqual(@as(?GasFees, null), cache.feesForUrgency(.normal, 1000));
 }
 
@@ -278,4 +278,85 @@ test "cache expiry - update after expiry revalidates" {
     // Valid again
     const fees = cache.get(1500).?;
     try std.testing.expectEqual(@as(u64, 200), fees.base_fee);
+}
+
+// =============================================================================
+// Concurrency stress tests
+//
+// A block-updater thread rewrites the cached `GasFees` (a multi-word struct)
+// while trading threads read it on the hot path. Every write establishes the
+// EIP-1559 invariant `max_fee_per_gas == 2*base_fee + priority`, so a coherent
+// (untorn) read must always satisfy it. Without the guarding mutex a cross-
+// field tear -- new base with stale max, or a half-set optional -- would break
+// the invariant and fail the test. The mutex is validated the same way as the
+// nonce manager's pending map: real OS-thread contention.
+// =============================================================================
+
+const stress_priority_fee: u64 = 1_000_000_000;
+
+const GasStressWorkers = struct {
+    /// Repeatedly refresh the cache from a rotating set of distinct base fees.
+    fn writer(cache: *GasCache, iterations: usize) void {
+        var i: usize = 0;
+        while (i < iterations) : (i += 1) {
+            const base: u64 = (@as(u64, @intCast(i % 7)) + 1) * 10_000_000_000;
+            cache.updateFromBlock(base, 1000);
+        }
+    }
+
+    /// Every non-null snapshot must be internally consistent.
+    fn reader(cache: *GasCache, iterations: usize, errors: *std.atomic.Value(u32)) void {
+        var i: usize = 0;
+        while (i < iterations) : (i += 1) {
+            // `get` returns the stored struct verbatim: max = 2*base + prio.
+            if (cache.get(1500)) |fees| {
+                if (fees.max_priority_fee != stress_priority_fee or
+                    fees.max_fee_per_gas != 2 * fees.base_fee + stress_priority_fee)
+                {
+                    _ = errors.fetchAdd(1, .monotonic);
+                }
+            }
+            // feesForUrgency recomputes; the critical snapshot must also hold.
+            if (cache.feesForUrgency(.critical, 1500)) |fees| {
+                if (fees.max_priority_fee != 5 * stress_priority_fee or
+                    fees.max_fee_per_gas != 4 * fees.base_fee + 5 * stress_priority_fee)
+                {
+                    _ = errors.fetchAdd(1, .monotonic);
+                }
+            }
+        }
+    }
+};
+
+test "GasCache stays coherent under concurrent update/read" {
+    var cache = GasCache.init(.{ .ttl_ms = 1_000_000, .default_priority_fee = stress_priority_fee });
+
+    // Seed so readers see a valid value immediately.
+    cache.updateFromBlock(10_000_000_000, 1000);
+
+    const thread_count = 8;
+    // High enough that a torn read (were the mutex removed) is caught reliably;
+    // on arm64 a 32-byte struct copy tears only in a narrow window, so the loop
+    // must be long. Verified: unguarded, this reports tens of thousands of
+    // inconsistent snapshots per run.
+    const iterations = 100000;
+    var errors = std.atomic.Value(u32).init(0);
+    var threads: [thread_count]std.Thread = undefined;
+
+    // Alternate writers and readers so both sides are always contending.
+    for (&threads, 0..) |*t, i| {
+        if (i % 2 == 0) {
+            t.* = try std.Thread.spawn(.{}, GasStressWorkers.writer, .{ &cache, iterations });
+        } else {
+            t.* = try std.Thread.spawn(.{}, GasStressWorkers.reader, .{ &cache, iterations, &errors });
+        }
+    }
+    for (&threads) |t| t.join();
+
+    try std.testing.expectEqual(@as(u32, 0), errors.load(.monotonic));
+
+    // Final state must be a well-formed, valid entry.
+    const final = cache.get(1500).?;
+    try std.testing.expectEqual(stress_priority_fee, final.max_priority_fee);
+    try std.testing.expectEqual(2 * final.base_fee + stress_priority_fee, final.max_fee_per_gas);
 }

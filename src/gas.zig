@@ -56,10 +56,31 @@ pub const Urgency = enum {
 /// All methods that need the current time accept an explicit `now_ms`
 /// parameter, keeping the module free of OS-level clock dependencies
 /// and making it fully deterministic in tests.
+///
+/// Thread-safety: the cached `current` value is a multi-word struct that a
+/// block updater thread writes (`updateFromBlock`) while trading threads read
+/// it on the hot path (`get`/`isValid`/`feesForUrgency`). Those accesses are
+/// not word-atomic, so every access to `current` is serialized behind a
+/// `std.Io.Mutex`, guaranteeing readers never observe a torn or half-updated
+/// `GasFees`. The mutex is self-contained: no `GasCache` method calls into
+/// another lock-guarded structure while holding it.
 pub const GasCache = struct {
     current: ?GasFees,
     ttl_ms: i64,
     default_priority_fee: u64,
+
+    /// Protects `current`. `std.Io.Mutex` is a futex-based blocking mutex
+    /// (atomic fast path, OS futex wait only under contention). Same pattern
+    /// as `nonce.HftNonceManager`; Zig 0.16 routes the contended path through
+    /// the `Io` handle below.
+    mutex: std.Io.Mutex,
+
+    /// `Io` handle backing the mutex. `global_single_threaded` refers only to
+    /// the absence of an async worker pool -- its futex wait still issues a
+    /// real OS futex, so cross-thread locking is correct for a multi-threaded
+    /// build (and a `-fsingle-threaded` build only ever takes the atomic fast
+    /// path).
+    io: std.Io,
 
     /// Create a new `GasCache` from the given configuration.
     pub fn init(config: GasCacheConfig) GasCache {
@@ -67,35 +88,66 @@ pub const GasCache = struct {
             .current = null,
             .ttl_ms = config.ttl_ms,
             .default_priority_fee = config.default_priority_fee,
+            .mutex = .init,
+            .io = std.Io.Threaded.global_single_threaded.io(),
         };
     }
 
-    /// Check if cached gas fees are still valid at the given time.
-    /// Returns `false` when there is no cached value or the cache
-    /// has expired.
-    pub fn isValid(self: *const GasCache, now_ms: i64) bool {
+    /// Acquire the mutex guarding `current`.
+    fn lock(self: *GasCache) void {
+        self.mutex.lockUncancelable(self.io);
+    }
+
+    /// Release the mutex guarding `current`.
+    fn unlock(self: *GasCache) void {
+        self.mutex.unlock(self.io);
+    }
+
+    /// Validity check assuming the mutex is already held. Pure read of
+    /// `current`; kept `*const` so the locking wrappers can call it without
+    /// re-entering the (non-recursive) mutex.
+    fn isValidLocked(self: *const GasCache, now_ms: i64) bool {
         const fees = self.current orelse return false;
         return (now_ms - fees.updated_at_ms) < self.ttl_ms;
     }
 
-    /// Get cached fees, or `null` if stale / not yet populated.
-    pub fn get(self: *const GasCache, now_ms: i64) ?GasFees {
-        if (self.isValid(now_ms)) {
+    /// Fetch assuming the mutex is already held.
+    fn getLocked(self: *const GasCache, now_ms: i64) ?GasFees {
+        if (self.isValidLocked(now_ms)) {
             return self.current;
         }
         return null;
     }
 
+    /// Check if cached gas fees are still valid at the given time.
+    /// Returns `false` when there is no cached value or the cache
+    /// has expired.
+    pub fn isValid(self: *GasCache, now_ms: i64) bool {
+        self.lock();
+        defer self.unlock();
+        return self.isValidLocked(now_ms);
+    }
+
+    /// Get cached fees, or `null` if stale / not yet populated.
+    pub fn get(self: *GasCache, now_ms: i64) ?GasFees {
+        self.lock();
+        defer self.unlock();
+        return self.getLocked(now_ms);
+    }
+
     /// Update the cache from a new block's base fee.
     ///
     /// Computes the "normal" urgency EIP-1559 fee parameters and
-    /// stores them as the current cached value.
+    /// stores them as the current cached value. Arithmetic is saturating so a
+    /// pathologically large `base_fee` cannot panic in Safe builds.
     pub fn updateFromBlock(self: *GasCache, base_fee: u64, now_ms: i64) void {
         const priority = self.default_priority_fee;
+        self.lock();
+        defer self.unlock();
         self.current = .{
             .base_fee = base_fee,
             .max_priority_fee = priority,
-            .max_fee_per_gas = 2 * base_fee + priority,
+            .max_fee_per_gas = 2 *| base_fee +| priority,
             .updated_at_ms = now_ms,
         };
     }
@@ -108,8 +160,12 @@ pub const GasCache = struct {
     ///   - normal:   maxFee = 2*baseFee + priorityFee
     ///   - high:     maxFee = 3*baseFee + 2*priorityFee
     ///   - critical: maxFee = 4*baseFee + 5*priorityFee
-    pub fn feesForUrgency(self: *const GasCache, urgency: Urgency, now_ms: i64) ?GasFees {
-        const cached = self.get(now_ms) orelse return null;
+    ///
+    /// Arithmetic is saturating to stay panic-free in Safe builds.
+    pub fn feesForUrgency(self: *GasCache, urgency: Urgency, now_ms: i64) ?GasFees {
+        self.lock();
+        defer self.unlock();
+        const cached = self.getLocked(now_ms) orelse return null;
 
         const base = cached.base_fee;
         const prio = self.default_priority_fee;
@@ -117,15 +173,15 @@ pub const GasCache = struct {
         const effective_priority: u64 = switch (urgency) {
             .low => prio,
             .normal => prio,
-            .high => 2 * prio,
-            .critical => 5 * prio,
+            .high => 2 *| prio,
+            .critical => 5 *| prio,
         };
 
         const max_fee: u64 = switch (urgency) {
-            .low => base + prio,
-            .normal => 2 * base + prio,
-            .high => 3 * base + 2 * prio,
-            .critical => 4 * base + 5 * prio,
+            .low => base +| prio,
+            .normal => 2 *| base +| prio,
+            .high => 3 *| base +| 2 *| prio,
+            .critical => 4 *| base +| 5 *| prio,
         };
 
         return .{
@@ -173,7 +229,7 @@ test "GasCache init accepts custom config" {
 }
 
 test "GasCache isValid returns false when empty" {
-    const cache = GasCache.init(.{});
+    var cache = GasCache.init(.{});
     try std.testing.expect(!cache.isValid(1000));
 }
 
@@ -194,7 +250,7 @@ test "GasCache isValid returns false after TTL expires" {
 }
 
 test "GasCache get returns null when empty" {
-    const cache = GasCache.init(.{});
+    var cache = GasCache.init(.{});
     try std.testing.expectEqual(@as(?GasFees, null), cache.get(1000));
 }
 
@@ -237,7 +293,7 @@ test "GasCache updateFromBlock replaces previous value" {
 }
 
 test "feesForUrgency returns null when cache is empty" {
-    const cache = GasCache.init(.{});
+    var cache = GasCache.init(.{});
     try std.testing.expectEqual(@as(?GasFees, null), cache.feesForUrgency(.normal, 1000));
 }
 

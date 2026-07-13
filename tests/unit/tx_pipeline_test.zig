@@ -575,3 +575,132 @@ test "end-to-end - prepare, submit, confirm lifecycle" {
     try std.testing.expectEqual(@as(usize, 0), nonce_mgr.pendingCount());
     try std.testing.expectEqual(@as(u64, 101), nonce_mgr.peekNextNonce());
 }
+
+// =============================================================================
+// Concurrency stress tests
+//
+// These exercise the mutex-guarded `in_flight` map (and its interplay with the
+// nonce manager and gas cache) under real OS-thread contention, validating the
+// pipeline's thread-safety claim. Each thread operates on its own disjoint set
+// of tx hashes so the expected final state is deterministic; any lost, torn, or
+// double-counted map mutation shows up as an inconsistent count or a missing
+// entry. Any operation that spuriously fails increments `errors`, which must be
+// zero at the end.
+// =============================================================================
+
+/// Deterministic, collision-free tx hash for a given (thread, iteration).
+fn stressHash(thread_id: u64, k: u64) [32]u8 {
+    var h = [_]u8{0} ** 32;
+    std.mem.writeInt(u64, h[0..8], thread_id, .little);
+    std.mem.writeInt(u64, h[8..16], k, .little);
+    return h;
+}
+
+const TxStressWorkers = struct {
+    /// Full prepare -> record -> confirm cycle on disjoint hashes. Net effect on
+    /// `in_flight` is zero per iteration.
+    fn cycle(pipeline: *TxPipeline, thread_id: u64, count: u64, errors: *std.atomic.Value(u32)) void {
+        var k: u64 = 0;
+        while (k < count) : (k += 1) {
+            const prepared = pipeline.prepare(makeRequest(200_000, .normal), 2000) catch {
+                _ = errors.fetchAdd(1, .monotonic);
+                continue;
+            };
+            pipeline.recordSubmission(stressHash(thread_id, k), prepared, 2000) catch {
+                _ = errors.fetchAdd(1, .monotonic);
+                continue;
+            };
+            pipeline.confirmTx(stressHash(thread_id, k));
+        }
+    }
+
+    /// Prepare + record only, leaving every tx in-flight.
+    fn recordOnly(pipeline: *TxPipeline, thread_id: u64, count: u64, errors: *std.atomic.Value(u32)) void {
+        var k: u64 = 0;
+        while (k < count) : (k += 1) {
+            const prepared = pipeline.prepare(makeRequest(200_000, .normal), 2000) catch {
+                _ = errors.fetchAdd(1, .monotonic);
+                continue;
+            };
+            pipeline.recordSubmission(stressHash(thread_id, k), prepared, 2000) catch {
+                _ = errors.fetchAdd(1, .monotonic);
+            };
+        }
+    }
+};
+
+test "concurrent prepare/record/confirm cycles leave both maps empty" {
+    var nonce_mgr = HftNonceManager.init(std.testing.allocator, 0);
+    defer nonce_mgr.deinit();
+
+    var gas_cache = GasCache.init(.{ .ttl_ms = 1_000_000, .default_priority_fee = 1_000_000_000 });
+    gas_cache.updateFromBlock(25_000_000_000, 1000);
+
+    var pipeline = setupPipeline(std.testing.allocator, &nonce_mgr, &gas_cache, .{
+        .max_in_flight = 1_000_000,
+    });
+    defer pipeline.deinit();
+
+    const thread_count = 8;
+    const per_thread: u64 = 1000;
+    var errors = std.atomic.Value(u32).init(0);
+    var threads: [thread_count]std.Thread = undefined;
+
+    for (&threads, 0..) |*t, i| {
+        t.* = try std.Thread.spawn(
+            .{},
+            TxStressWorkers.cycle,
+            .{ &pipeline, @as(u64, @intCast(i)), per_thread, &errors },
+        );
+    }
+    for (&threads) |t| t.join();
+
+    try std.testing.expectEqual(@as(u32, 0), errors.load(.monotonic));
+    // Every cycle confirmed its own tx, so both bookkeeping maps must be empty.
+    try std.testing.expectEqual(@as(usize, 0), pipeline.inFlightCount());
+    try std.testing.expectEqual(@as(usize, 0), nonce_mgr.pendingCount());
+    // Exactly one nonce was acquired per successful prepare (no rewinds).
+    try std.testing.expectEqual(@as(u64, thread_count * per_thread), nonce_mgr.peekNextNonce());
+}
+
+test "concurrent record-only submissions populate the map without corruption" {
+    var nonce_mgr = HftNonceManager.init(std.testing.allocator, 0);
+    defer nonce_mgr.deinit();
+
+    var gas_cache = GasCache.init(.{ .ttl_ms = 1_000_000, .default_priority_fee = 1_000_000_000 });
+    gas_cache.updateFromBlock(25_000_000_000, 1000);
+
+    var pipeline = setupPipeline(std.testing.allocator, &nonce_mgr, &gas_cache, .{
+        .max_in_flight = 1_000_000,
+    });
+    defer pipeline.deinit();
+
+    const thread_count = 8;
+    const per_thread: u64 = 500;
+    var errors = std.atomic.Value(u32).init(0);
+    var threads: [thread_count]std.Thread = undefined;
+
+    for (&threads, 0..) |*t, i| {
+        t.* = try std.Thread.spawn(
+            .{},
+            TxStressWorkers.recordOnly,
+            .{ &pipeline, @as(u64, @intCast(i)), per_thread, &errors },
+        );
+    }
+    for (&threads) |t| t.join();
+
+    try std.testing.expectEqual(@as(u32, 0), errors.load(.monotonic));
+    // Exactly one entry per (thread, iteration) -- no lost or clobbered inserts.
+    const expected: usize = thread_count * per_thread;
+    try std.testing.expectEqual(expected, pipeline.inFlightCount());
+    try std.testing.expectEqual(expected, nonce_mgr.pendingCount());
+
+    // Every expected hash must be present.
+    var tid: u64 = 0;
+    while (tid < thread_count) : (tid += 1) {
+        var k: u64 = 0;
+        while (k < per_thread) : (k += 1) {
+            try std.testing.expect(pipeline.in_flight.get(stressHash(tid, k)) != null);
+        }
+    }
+}

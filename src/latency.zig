@@ -40,7 +40,9 @@ pub const LatencyTracker = struct {
     };
 
     /// Compute latency statistics over the rolling window.
-    pub fn getStats(self: *LatencyTracker) Stats {
+    /// Read-only: samples are copied into a local buffer before sorting, so
+    /// `self` is never mutated.
+    pub fn getStats(self: *const LatencyTracker) Stats {
         if (self.sample_count == 0) {
             return .{
                 .count = 0,
