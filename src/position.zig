@@ -75,6 +75,49 @@ pub fn currentLeverage(raw: types.PositionRawData, mark_price: f64) f64 {
     return positionValue(raw, mark_price) / m;
 }
 
+/// Entry price of a position: |usdDelta| / |perpDelta|, derived from the entry
+/// `BalanceDelta`. Returns 0 when the position has no perp exposure.
+pub fn entryPrice(raw: types.PositionRawData) f64 {
+    const pd = perpDelta(raw);
+    if (pd == 0) return 0.0;
+    const pd_f = @abs(@as(f64, @floatFromInt(pd)));
+    const usd_f = @abs(@as(f64, @floatFromInt(usdDelta(raw))));
+    return usd_f / pd_f;
+}
+
+/// Estimated liquidation price for a position, in human price units.
+///
+/// `effective_margin` (human USDC) overrides the stored margin when the caller
+/// already knows the funding-adjusted margin; pass `null` to use `raw.margin`.
+/// Returns `null` when the position has no size or non-positive margin.
+///
+/// Mirrors the TS SDK: at liquidation, `margin + pnl == liqRatio * notional`.
+pub fn liquidationPrice(
+    raw: types.PositionRawData,
+    is_long: bool,
+    effective_margin: ?f64,
+) ?f64 {
+    const entry = entryPrice(raw);
+    const size = @abs(positionSize(raw));
+    const margin = effective_margin orelse marginHuman(raw);
+    if (size == 0.0 or margin <= 0.0) return null;
+
+    const liq_ratio = @as(f64, @floatFromInt(raw.liq_margin_ratio)) / constants.F64_1E6;
+    const entry_notional = size * entry;
+    const buffer = (margin - liq_ratio * entry_notional) / size;
+    return if (is_long) @max(0.0, entry - buffer) else entry + buffer;
+}
+
+/// PnL as a percentage of the position's initial margin. `pnl`, `funding`, and
+/// `margin` are all human USDC values (`margin` is the current margin). Returns
+/// 0 when the implied initial margin is non-positive.
+pub fn pnlPercentage(pnl: f64, funding: f64, margin: f64) f64 {
+    const total_pnl = pnl + funding;
+    const initial_margin = margin - total_pnl;
+    if (initial_margin <= 0.0) return 0.0;
+    return (total_pnl / initial_margin) * 100.0;
+}
+
 // ---------------------------------------------------------------------------
 // Accessors for OpenPositionData
 // ---------------------------------------------------------------------------

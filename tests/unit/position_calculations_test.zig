@@ -121,3 +121,81 @@ test "marginHuman converts 1e6-scaled margin to USDC" {
     const raw = makeRaw(0, 0, 100_000_000); // 100 USDC
     try std.testing.expectEqual(@as(f64, 100.0), position.marginHuman(raw));
 }
+
+// =============================================================================
+// entryPrice
+// =============================================================================
+
+test "entryPrice - |usd| / |perp|" {
+    const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
+    try std.testing.expectApproxEqAbs(@as(f64, 1500.0), position.entryPrice(raw), 0.0001);
+}
+
+test "entryPrice - short position uses absolute values" {
+    const raw = makeRaw(-1_000_000, 1_500_000_000, 100_000_000);
+    try std.testing.expectApproxEqAbs(@as(f64, 1500.0), position.entryPrice(raw), 0.0001);
+}
+
+test "entryPrice - zero perp delta returns 0" {
+    const raw = makeRaw(0, 0, 100_000_000);
+    try std.testing.expectEqual(@as(f64, 0.0), position.entryPrice(raw));
+}
+
+// =============================================================================
+// liquidationPrice
+//
+// size 1.0, entry 1500, margin 100 USDC, liq ratio 0.05 -> buffer 25.
+// =============================================================================
+
+test "liquidationPrice - long liquidates below entry" {
+    const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
+    const lp = position.liquidationPrice(raw, true, null).?;
+    try std.testing.expectApproxEqAbs(@as(f64, 1475.0), lp, 0.0001);
+}
+
+test "liquidationPrice - short liquidates above entry" {
+    const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
+    const lp = position.liquidationPrice(raw, false, null).?;
+    try std.testing.expectApproxEqAbs(@as(f64, 1525.0), lp, 0.0001);
+}
+
+test "liquidationPrice - effective margin override" {
+    const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
+    // effective margin 50 -> buffer (50 - 75)/1 = -25
+    try std.testing.expectApproxEqAbs(@as(f64, 1525.0), position.liquidationPrice(raw, true, 50.0).?, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f64, 1475.0), position.liquidationPrice(raw, false, 50.0).?, 0.0001);
+}
+
+test "liquidationPrice - long price is clamped to zero" {
+    // 10k USDC margin pushes the long liquidation price below zero
+    const raw = makeRaw(1_000_000, -1_500_000_000, 10_000_000_000);
+    try std.testing.expectEqual(@as(f64, 0.0), position.liquidationPrice(raw, true, null).?);
+}
+
+test "liquidationPrice - null when the position has no size" {
+    const raw = makeRaw(0, 0, 100_000_000);
+    try std.testing.expectEqual(@as(?f64, null), position.liquidationPrice(raw, true, null));
+}
+
+test "liquidationPrice - null when margin is non-positive" {
+    const raw = makeRaw(1_000_000, -1_500_000_000, 0);
+    try std.testing.expectEqual(@as(?f64, null), position.liquidationPrice(raw, true, null));
+}
+
+// =============================================================================
+// pnlPercentage
+// =============================================================================
+
+test "pnlPercentage - profit relative to initial margin" {
+    // pnl 10 + funding 2 = 12; initial margin = 100 - 12 = 88; 12/88*100
+    try std.testing.expectApproxEqAbs(@as(f64, 13.636363), position.pnlPercentage(10.0, 2.0, 100.0), 0.0001);
+}
+
+test "pnlPercentage - loss is negative" {
+    // pnl -10; initial margin = 100 - (-10) = 110; -10/110*100
+    try std.testing.expectApproxEqAbs(@as(f64, -9.090909), position.pnlPercentage(-10.0, 0.0, 100.0), 0.0001);
+}
+
+test "pnlPercentage - non-positive initial margin returns 0" {
+    try std.testing.expectEqual(@as(f64, 0.0), position.pnlPercentage(200.0, 0.0, 100.0));
+}
