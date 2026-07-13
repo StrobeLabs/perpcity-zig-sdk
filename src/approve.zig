@@ -16,13 +16,20 @@ pub const ApproveError = error{
     ApproveFailed,
 };
 
-/// Approve `perp` (a deployed Perp market) to spend `amount_scaled` USDC
-/// (6-decimal units). Returns the approval transaction hash.
-pub fn approveUsdc(
+/// The `(to, selector, args)` for an ERC20 `approve` of a Perp market, plus the
+/// shared input validation. Built once so the write path and the `simulate`
+/// preflight encode byte-identical calldata.
+const ApproveCall = struct {
+    to: types.Address,
+    selector: [4]u8,
+    args: [2]AbiValue,
+};
+
+fn buildApprove(
     ctx: *PerpCityContext,
     perp: types.Address,
     amount_scaled: u256,
-) !types.Bytes32 {
+) !ApproveCall {
     if (amount_scaled == 0) return ApproveError.ZeroApprovalAmount;
 
     if (std.mem.eql(u8, &ctx.deployments.usdc, &types.ZERO_ADDRESS)) {
@@ -33,12 +40,28 @@ pub fn approveUsdc(
         return ApproveError.InvalidPerpAddress;
     }
 
+    return .{
+        .to = ctx.deployments.usdc,
+        .selector = erc20_abi.approve_selector,
+        .args = .{ .{ .address = perp }, .{ .uint256 = amount_scaled } },
+    };
+}
+
+/// Approve `perp` (a deployed Perp market) to spend `amount_scaled` USDC
+/// (6-decimal units). Returns the approval transaction hash.
+pub fn approveUsdc(
+    ctx: *PerpCityContext,
+    perp: types.Address,
+    amount_scaled: u256,
+) !types.Bytes32 {
+    const c = try buildApprove(ctx, perp, amount_scaled);
+
     const tx_hash = try chain_client.writeContract(
         &ctx.client,
         ctx.allocator,
-        ctx.deployments.usdc,
-        erc20_abi.approve_selector,
-        &.{ .{ .address = perp }, .{ .uint256 = amount_scaled } },
+        c.to,
+        c.selector,
+        &c.args,
         0,
     );
 
@@ -53,4 +76,27 @@ pub fn approveUsdc(
 /// Approve maximum USDC for a Perp market.
 pub fn approveUsdcMax(ctx: *PerpCityContext, perp: types.Address) !types.Bytes32 {
     return approveUsdc(ctx, perp, std.math.maxInt(u256));
+}
+
+/// Opt-in revert preflight for `approveUsdc`: encodes the same calldata and runs
+/// it through eth_call. Returns normally if the approval would not revert;
+/// propagates the revert as an error. Does not send a transaction.
+pub fn simulateApproveUsdc(
+    ctx: *PerpCityContext,
+    perp: types.Address,
+    amount_scaled: u256,
+) !void {
+    const c = try buildApprove(ctx, perp, amount_scaled);
+    return chain_client.simulateContract(
+        &ctx.client,
+        ctx.allocator,
+        c.to,
+        c.selector,
+        &c.args,
+    );
+}
+
+/// Opt-in revert preflight for `approveUsdcMax`.
+pub fn simulateApproveUsdcMax(ctx: *PerpCityContext, perp: types.Address) !void {
+    return simulateApproveUsdc(ctx, perp, std.math.maxInt(u256));
 }

@@ -103,6 +103,26 @@ pub fn writeContract(
     return try client.sendTransaction(to, calldata, value);
 }
 
+/// Simulate a state-changing call via eth_call: encode calldata, call, discard
+/// the result. Returns normally if the call would NOT revert; propagates the
+/// underlying error (an on-chain revert surfaces as an eth_call error) otherwise.
+///
+/// This is the opt-in revert preflight: callers invoke it before a matching
+/// `writeContract` when they want to learn a tx will revert without spending gas
+/// or burning a nonce. It is never called implicitly on the write path.
+pub fn simulateContract(
+    client: *ChainClient,
+    allocator: std.mem.Allocator,
+    to: [20]u8,
+    sel: [4]u8,
+    args: []const AbiValue,
+) !void {
+    const calldata = try eth.abi_encode.encodeFunctionCall(allocator, sel, args);
+    defer allocator.free(calldata);
+    const result = try client.call(allocator, to, calldata);
+    allocator.free(result);
+}
+
 /// Free values returned by `readContract`.
 pub fn freeReturnValues(values: []AbiValue, allocator: std.mem.Allocator) void {
     eth.abi_decode.freeValues(values, allocator);
