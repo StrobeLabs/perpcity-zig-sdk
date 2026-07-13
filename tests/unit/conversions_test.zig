@@ -442,3 +442,32 @@ test "round-trip: scaleToX96 -> scaleFromX96 should be close for integer" {
     const recovered = try conversions.scaleFromX96(scaled);
     try std.testing.expectApproxEqAbs(original, recovered, 0.001);
 }
+
+// =============================================================================
+// uint256ToInt256
+// =============================================================================
+
+test "uint256ToInt256 - small positive values are unchanged" {
+    try std.testing.expectEqual(@as(i256, 0), conversions.uint256ToInt256(0));
+    try std.testing.expectEqual(@as(i256, 5), conversions.uint256ToInt256(5));
+}
+
+test "uint256ToInt256 - just below 2^255 is i256 max" {
+    const v: u256 = (@as(u256, 1) << 255) - 1;
+    try std.testing.expectEqual(std.math.maxInt(i256), conversions.uint256ToInt256(v));
+}
+
+test "uint256ToInt256 - 2^255 is i256 min" {
+    const v: u256 = @as(u256, 1) << 255;
+    try std.testing.expectEqual(std.math.minInt(i256), conversions.uint256ToInt256(v));
+}
+
+test "uint256ToInt256 - all-ones (2^256 - 1) is -1" {
+    try std.testing.expectEqual(@as(i256, -1), conversions.uint256ToInt256(std.math.maxInt(u256)));
+}
+
+test "uint256ToInt256 - above the threshold equals value - 2^256" {
+    const v: u256 = (@as(u256, 1) << 255) + 100;
+    // v - 2^256 == -(2^255 - 100) == minInt(i256) + 100
+    try std.testing.expectEqual(std.math.minInt(i256) + 100, conversions.uint256ToInt256(v));
+}

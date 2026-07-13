@@ -6,6 +6,8 @@ pub const conversions = @import("conversions.zig");
 pub const liquidity = @import("liquidity.zig");
 pub const position = @import("position.zig");
 pub const perp = @import("perp.zig");
+pub const sizing = @import("sizing.zig");
+pub const funding = @import("funding.zig");
 pub const user = @import("user.zig");
 pub const errors = @import("errors.zig");
 

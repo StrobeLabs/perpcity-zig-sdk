@@ -109,6 +109,18 @@ pub fn scaleFrom6Decimals(value: i64) f64 {
     return @as(f64, @floatFromInt(value)) / constants.F64_1E6;
 }
 
+/// Reinterpret a `u256` as a two's-complement `i256`.
+///
+/// Several `Perp` getters (e.g. effective/net margin) return a `uint256` that
+/// underflows below `2^255` when the underlying value is negative -- the case
+/// where a position is underwater. Reinterpreting the raw 256-bit word as a
+/// two's-complement signed integer recovers the intended value. This is a
+/// zero-cost bit reinterpretation and matches the TS SDK's
+/// `value >= 2^255 ? value - 2^256 : value`.
+pub fn uint256ToInt256(value: u256) i256 {
+    return @bitCast(value);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

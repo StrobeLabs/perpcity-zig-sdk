@@ -3,6 +3,8 @@ comptime {
     _ = @import("unit/conversions_test.zig");
     _ = @import("unit/liquidity_test.zig");
     _ = @import("unit/position_calculations_test.zig");
+    _ = @import("unit/sizing_test.zig");
+    _ = @import("unit/funding_test.zig");
     _ = @import("unit/perp_functions_test.zig");
     _ = @import("unit/user_functions_test.zig");
     _ = @import("unit/errors_test.zig");

@@ -12,3 +12,12 @@ pub const F64_1E6: f64 = 1_000_000.0;
 
 /// Maximum safe integer for f64 conversion (~2^53).
 pub const MAX_SAFE_F64_INT: u64 = 9_007_199_254_740_992;
+
+/// Uniswap V4 tick spacing used by PerpCity pools.
+pub const TICK_SPACING: i32 = 30;
+
+/// Minimum representable Uniswap tick (full-range bound).
+pub const MIN_TICK: i32 = -887272;
+
+/// Maximum representable Uniswap tick (full-range bound).
+pub const MAX_TICK: i32 = 887272;
