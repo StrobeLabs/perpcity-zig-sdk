@@ -42,6 +42,11 @@ test "derivePerpDelta - rejects non-positive price" {
     try std.testing.expectError(error.PriceMustBePositive, sizing.derivePerpDelta(100.0, 2.0, 0.0, true));
 }
 
+test "derivePerpDelta - rejects a price that truncates to zero (no div-by-zero)" {
+    // 1e-7 floors to 0 once scaled by 1e6; must error rather than divide by zero.
+    try std.testing.expectError(error.PriceTooSmall, sizing.derivePerpDelta(100.0, 2.0, 0.0000001, true));
+}
+
 // =============================================================================
 // calculateAlignedTicks
 // =============================================================================
@@ -94,4 +99,9 @@ test "calculateAlignedTicks - rejects a range above MAX_TICK" {
 test "calculateAlignedTicks - rejects a range that collapses after alignment" {
     // price 1.0 maps exactly to tick 0 for both floor and ceil.
     try std.testing.expectError(error.RangeTooNarrow, sizing.calculateAlignedTicks(1.0, 1.0, 30));
+}
+
+test "calculateAlignedTicks - rejects an inverted range (lower price > upper price)" {
+    // aligned_lower ends up above aligned_upper; the `>=` check must catch it.
+    try std.testing.expectError(error.RangeTooNarrow, sizing.calculateAlignedTicks(1600.0, 1400.0, 30));
 }

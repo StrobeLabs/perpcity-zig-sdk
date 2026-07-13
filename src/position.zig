@@ -89,9 +89,14 @@ pub fn entryPrice(raw: types.PositionRawData) f64 {
 ///
 /// `effective_margin` (human USDC) overrides the stored margin when the caller
 /// already knows the funding-adjusted margin; pass `null` to use `raw.margin`.
-/// Returns `null` when the position has no size or non-positive margin.
+/// Returns `null` when the position has no size, non-positive margin, or (for
+/// longs) a liquidation margin ratio >= 100% (no positive liquidation price).
 ///
-/// Mirrors the TS SDK: at liquidation, `margin + pnl == liqRatio * notional`.
+/// The contract defines the margin ratio as `equity / value`, where `value` is
+/// the position's *current* notional (`size * price`). Solving
+/// `equity == liq_ratio * size * liq_price` at the liquidation price gives:
+///   long:  (entry - margin/size) / (1 - liq_ratio)
+///   short: (entry + margin/size) / (1 + liq_ratio)
 pub fn liquidationPrice(
     raw: types.PositionRawData,
     is_long: bool,
@@ -103,9 +108,12 @@ pub fn liquidationPrice(
     if (size == 0.0 or margin <= 0.0) return null;
 
     const liq_ratio = @as(f64, @floatFromInt(raw.liq_margin_ratio)) / constants.F64_1E6;
-    const entry_notional = size * entry;
-    const buffer = (margin - liq_ratio * entry_notional) / size;
-    return if (is_long) @max(0.0, entry - buffer) else entry + buffer;
+    if (is_long) {
+        const denom = 1.0 - liq_ratio;
+        if (denom <= 0.0) return null;
+        return @max(0.0, (entry - margin / size) / denom);
+    }
+    return (entry + margin / size) / (1.0 + liq_ratio);
 }
 
 /// PnL as a percentage of the position's initial margin. `pnl`, `funding`, and

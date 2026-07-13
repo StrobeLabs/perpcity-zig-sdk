@@ -62,3 +62,10 @@ test "scaled result that overflows i128 returns ValueTooLarge instead of panicki
     const big: i256 = try std.math.powi(i256, 10, 45);
     try std.testing.expectError(error.ValueTooLarge, funding.fundingPerSecondX96ToRatePerDay(big));
 }
+
+test "intermediate multiply overflow returns ValueTooLarge instead of trapping" {
+    // maxInt(i256) * SECONDS_PER_DAY overflows the i256 multiply itself; the
+    // checked multiply must surface an error rather than trap.
+    try std.testing.expectError(error.ValueTooLarge, funding.fundingPerSecondX96ToRatePerDay(std.math.maxInt(i256)));
+    try std.testing.expectError(error.ValueTooLarge, funding.fundingDiffX96ToRatePerPeriod(std.math.maxInt(i256), 1, 60));
+}

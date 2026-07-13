@@ -10,6 +10,7 @@ pub const SizingError = error{
     MarginMustBePositive,
     LeverageMustBePositive,
     PriceMustBePositive,
+    PriceTooSmall,
     AmountTooLarge,
     InvalidTickSpacing,
     TickBelowMin,
@@ -33,6 +34,9 @@ pub fn derivePerpDelta(margin: f64, leverage: f64, price: f64, is_long: bool) Si
     const margin_scaled: i256 = conversions.scale6Decimals(margin) catch return error.AmountTooLarge;
     const leverage_scaled: i256 = conversions.scale6Decimals(leverage) catch return error.AmountTooLarge;
     const price_scaled: i256 = conversions.scale6Decimals(price) catch return error.AmountTooLarge;
+
+    // A price below 1e-6 floors to zero once scaled and would divide by zero.
+    if (price_scaled == 0) return error.PriceTooSmall;
 
     // notional = margin * leverage / 1e6 ; perpSize = notional * 1e6 / price.
     // @divTrunc truncates toward zero, matching bigint division for positives.
@@ -68,7 +72,8 @@ pub fn calculateAlignedTicks(
 
     if (aligned_lower < constants.MIN_TICK) return error.TickBelowMin;
     if (aligned_upper > constants.MAX_TICK) return error.TickAboveMax;
-    if (aligned_lower == aligned_upper) return error.RangeTooNarrow;
+    // `>=` (not just `==`) also rejects inverted inputs (price_lower > price_upper).
+    if (aligned_lower >= aligned_upper) return error.RangeTooNarrow;
 
     return .{ .lower = aligned_lower, .upper = aligned_upper };
 }

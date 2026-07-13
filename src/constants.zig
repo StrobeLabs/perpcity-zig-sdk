@@ -21,9 +21,3 @@ pub const MIN_TICK: i32 = -887272;
 
 /// Maximum representable Uniswap tick (full-range bound).
 pub const MAX_TICK: i32 = 887272;
-
-/// Minimum representable price for tick conversions.
-pub const MIN_PRICE: f64 = 1e-6;
-
-/// Maximum representable price for tick conversions.
-pub const MAX_PRICE: f64 = 1e6;

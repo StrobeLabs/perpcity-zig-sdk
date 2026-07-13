@@ -28,7 +28,9 @@ pub fn fundingDiffX96ToRatePerPeriod(
 ) FundingError!f64 {
     if (interval == 0) return error.IntervalMustBePositive;
     const q96: i256 = @intCast(constants.Q96);
-    const numerator = funding_diff_x96 * @as(i256, @intCast(period_seconds)) * PRECISION;
+    // Checked so a large diff cannot overflow the i256 multiply and trap.
+    const numerator = try checkedMul(try checkedMul(funding_diff_x96, @intCast(period_seconds)), PRECISION);
+    // q96 (2^96) * interval (<= 2^64) <= 2^160, so this cannot overflow i256.
     const denominator = q96 * @as(i256, @intCast(interval));
     return scaledToF64(@divTrunc(numerator, denominator));
 }
@@ -37,14 +39,24 @@ pub fn fundingDiffX96ToRatePerPeriod(
 /// rate.
 pub fn fundingPerSecondX96ToRatePerMinute(funding_per_second_x96: i256) FundingError!f64 {
     const q96: i256 = @intCast(constants.Q96);
-    return scaledToF64(@divTrunc(funding_per_second_x96 * SECONDS_PER_MINUTE * PRECISION, q96));
+    const numerator = try checkedMul(try checkedMul(funding_per_second_x96, SECONDS_PER_MINUTE), PRECISION);
+    return scaledToF64(@divTrunc(numerator, q96));
 }
 
 /// Convert a per-second funding rate (X96 fixed-point, signed) to a per-day
 /// rate.
 pub fn fundingPerSecondX96ToRatePerDay(funding_per_second_x96: i256) FundingError!f64 {
     const q96: i256 = @intCast(constants.Q96);
-    return scaledToF64(@divTrunc(funding_per_second_x96 * SECONDS_PER_DAY * PRECISION, q96));
+    const numerator = try checkedMul(try checkedMul(funding_per_second_x96, SECONDS_PER_DAY), PRECISION);
+    return scaledToF64(@divTrunc(numerator, q96));
+}
+
+/// Multiply two `i256` values, returning `error.ValueTooLarge` on overflow
+/// instead of trapping.
+fn checkedMul(a: i256, b: i256) FundingError!i256 {
+    const result = @mulWithOverflow(a, b);
+    if (result[1] != 0) return error.ValueTooLarge;
+    return result[0];
 }
 
 /// Convert an `i256` pre-scaled by `PRECISION` (1e18) back to an `f64`. Narrows
