@@ -86,6 +86,7 @@ pub const MockChainClient = struct {
         .sendTransaction = mockSendTransaction,
         .getReceipt = mockGetReceipt,
         .address = mockAddress,
+        .callBatch = mockCallBatch,
     };
 
     fn mockCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -97,6 +98,40 @@ pub const MockChainClient = struct {
         // Return a fresh copy owned by the caller's allocator, matching the eth
         // path where the read helper frees the response.
         return allocator.dupe(u8, stored);
+    }
+
+    fn mockCallBatch(
+        ptr: *anyopaque,
+        allocator: std.mem.Allocator,
+        calls: []const ChainClient.BatchCall,
+    ) anyerror![]ChainClient.BatchResult {
+        const self: *MockChainClient = @ptrCast(@alignCast(ptr));
+
+        const out = try allocator.alloc(ChainClient.BatchResult, calls.len);
+        var filled: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < filled) : (i += 1) allocator.free(out[i].bytes);
+            allocator.free(out);
+        }
+
+        for (calls, 0..) |c, i| {
+            // Resolve each call by its 4-byte selector (same table as `call`).
+            // A missing selector mirrors a failed on-chain call: success=false,
+            // empty bytes.
+            if (c.data.len >= 4) {
+                const sel: [4]u8 = c.data[0..4].*;
+                if (self.responses.get(sel)) |stored| {
+                    out[i] = .{ .success = true, .bytes = try allocator.dupe(u8, stored) };
+                } else {
+                    out[i] = .{ .success = false, .bytes = try allocator.alloc(u8, 0) };
+                }
+            } else {
+                out[i] = .{ .success = false, .bytes = try allocator.alloc(u8, 0) };
+            }
+            filled = i + 1;
+        }
+        return out;
     }
 
     fn mockSendTransaction(ptr: *anyopaque, to: [20]u8, data: []const u8, value: u256) anyerror![32]u8 {

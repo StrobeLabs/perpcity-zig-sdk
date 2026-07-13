@@ -13,6 +13,20 @@ pub const ChainClient = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
+    /// One read in a batched eth_call round-trip: a target and its calldata.
+    pub const BatchCall = struct {
+        to: [20]u8,
+        data: []const u8,
+    };
+
+    /// Result of one entry in a `callBatch`, index-aligned with the input calls.
+    /// `bytes` is owned by the caller (freed via `freeBatchResults`). A failed
+    /// on-chain call yields `success == false` with an empty `bytes`.
+    pub const BatchResult = struct {
+        success: bool,
+        bytes: []u8,
+    };
+
     pub const VTable = struct {
         /// eth_call; returns the raw ABI return bytes. Caller owns the slice
         /// (freed with the passed allocator by the read helper).
@@ -23,10 +37,19 @@ pub const ChainClient = struct {
         getReceipt: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, tx_hash: [32]u8, max_attempts: u32) anyerror!?eth.receipt.TransactionReceipt,
         /// Signer address.
         address: *const fn (ptr: *anyopaque) anyerror![20]u8,
+        /// Batched eth_call: collapses many reads into a single JSON-RPC
+        /// round-trip. Returns one `BatchResult` per input call, index-aligned;
+        /// each `bytes` is duped with the passed allocator and owned by the
+        /// caller (free the whole slice with `freeBatchResults`).
+        callBatch: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, calls: []const BatchCall) anyerror![]BatchResult,
     };
 
     pub fn call(self: *ChainClient, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) ![]u8 {
         return self.vtable.call(self.ptr, allocator, to, data);
+    }
+
+    pub fn callBatch(self: *ChainClient, allocator: std.mem.Allocator, calls: []const BatchCall) ![]BatchResult {
+        return self.vtable.callBatch(self.ptr, allocator, calls);
     }
 
     pub fn sendTransaction(self: *ChainClient, to: [20]u8, data: []const u8, value: u256) ![32]u8 {
@@ -83,6 +106,15 @@ pub fn writeContract(
 /// Free values returned by `readContract`.
 pub fn freeReturnValues(values: []AbiValue, allocator: std.mem.Allocator) void {
     eth.abi_decode.freeValues(values, allocator);
+}
+
+/// Free the slice returned by `ChainClient.callBatch`, including each entry's
+/// owned `bytes`. Empty (`success == false`) entries free cleanly too.
+pub fn freeBatchResults(results: []ChainClient.BatchResult, allocator: std.mem.Allocator) void {
+    for (results) |r| {
+        allocator.free(r.bytes);
+    }
+    allocator.free(results);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +187,7 @@ pub const EthChainClient = struct {
         .sendTransaction = ethSendTransaction,
         .getReceipt = ethGetReceipt,
         .address = ethAddress,
+        .callBatch = ethCallBatch,
     };
 
     fn ethCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -180,5 +213,48 @@ pub const EthChainClient = struct {
     fn ethAddress(ptr: *anyopaque) anyerror![20]u8 {
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
         return self.wallet.address();
+    }
+
+    fn ethCallBatch(
+        ptr: *anyopaque,
+        allocator: std.mem.Allocator,
+        calls: []const ChainClient.BatchCall,
+    ) anyerror![]ChainClient.BatchResult {
+        const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+
+        // eth.zig's BatchCaller issues all reads as a single JSON-RPC batch
+        // (one HTTP round-trip). It borrows the calldata (does not copy), which
+        // is fine: `calls` outlives `execute`.
+        var batch = eth.provider.BatchCaller.init(self.allocator, self.provider);
+        defer batch.deinit();
+        for (calls) |c| {
+            _ = try batch.addCall(c.to, c.data);
+        }
+
+        const eth_results = try batch.execute();
+        defer eth.provider.freeBatchResults(self.allocator, eth_results);
+
+        // Re-home every entry onto the passed allocator so callers can free the
+        // whole slice uniformly with `freeBatchResults`.
+        const out = try allocator.alloc(ChainClient.BatchResult, eth_results.len);
+        var filled: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < filled) : (i += 1) allocator.free(out[i].bytes);
+            allocator.free(out);
+        }
+
+        for (eth_results, 0..) |r, i| {
+            switch (r) {
+                .success => |data| {
+                    out[i] = .{ .success = true, .bytes = try allocator.dupe(u8, data) };
+                },
+                .rpc_error => {
+                    out[i] = .{ .success = false, .bytes = try allocator.alloc(u8, 0) };
+                },
+            }
+            filled = i + 1;
+        }
+        return out;
     }
 };

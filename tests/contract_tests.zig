@@ -5,4 +5,5 @@
 comptime {
     _ = @import("contract/context_read_test.zig");
     _ = @import("contract/context_getters_test.zig");
+    _ = @import("contract/context_batch_test.zig");
 }
