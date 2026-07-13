@@ -12,6 +12,7 @@ comptime {
     _ = @import("unit/gas_test.zig");
     _ = @import("unit/state_cache_test.zig");
     _ = @import("unit/events_test.zig");
+    _ = @import("unit/nonce_test.zig");
     _ = @import("unit/tx_pipeline_test.zig");
     _ = @import("unit/position_manager_test.zig");
 }
