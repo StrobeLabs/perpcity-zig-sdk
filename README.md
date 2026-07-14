@@ -77,7 +77,7 @@ const position = try sdk.perp_contract.openTaker(&ctx, perp, .{
 
 ## Architecture
 
-```
+```text
 Pure math layer (no dependencies):
   types, constants, conversions, sizing, funding, liquidity, position, perp
 
