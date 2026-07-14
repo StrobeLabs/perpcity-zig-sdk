@@ -13,13 +13,24 @@ pub const SentTx = struct {
 };
 
 /// Deterministic, in-memory `ChainClient` for unit-testing the contract layer
-/// without a network or Anvil. Reads are answered from a selector-keyed table
-/// of canned ABI return bytes; writes are recorded for assertions.
+/// without a network or Anvil. Reads are answered from a canned table of ABI
+/// return bytes; writes are recorded for assertions.
+///
+/// Read resolution checks the full-calldata table first, then falls back to the
+/// 4-byte selector table. The selector table is enough when a call's arguments
+/// don't change the answer; the calldata table lets a test return distinct
+/// results for the same function called with different arguments (e.g. per-id
+/// `ownerOf`).
 pub const MockChainClient = struct {
     allocator: std.mem.Allocator,
     /// Maps a 4-byte selector (first 4 bytes of the calldata) to owned canned
     /// raw ABI return bytes.
     responses: std.AutoHashMap([4]u8, []u8),
+    /// Maps full calldata (selector + encoded args) to owned canned raw ABI
+    /// return bytes. Checked before `responses`, so it overrides the
+    /// selector-level answer for a specific argument set. Keys and values are
+    /// owned by the mock and freed on `deinit`.
+    responses_by_calldata: std.StringHashMap([]u8),
     /// Records every `sendTransaction` for assertions.
     sent: std.ArrayList(SentTx),
     /// Address returned by `address()`.
@@ -46,6 +57,7 @@ pub const MockChainClient = struct {
         return .{
             .allocator = allocator,
             .responses = std.AutoHashMap([4]u8, []u8).init(allocator),
+            .responses_by_calldata = std.StringHashMap([]u8).init(allocator),
             .sent = .empty,
         };
     }
@@ -56,6 +68,13 @@ pub const MockChainClient = struct {
             self.allocator.free(v.*);
         }
         self.responses.deinit();
+
+        var cit = self.responses_by_calldata.iterator();
+        while (cit.next()) |e| {
+            self.allocator.free(e.key_ptr.*);
+            self.allocator.free(e.value_ptr.*);
+        }
+        self.responses_by_calldata.deinit();
 
         for (self.sent.items) |tx| {
             self.allocator.free(tx.data);
@@ -104,6 +123,29 @@ pub const MockChainClient = struct {
         gop.value_ptr.* = copy;
     }
 
+    /// Register the raw ABI return bytes for an exact calldata (selector +
+    /// encoded args). Takes precedence over the selector-level table, so a test
+    /// can return different results for the same function called with different
+    /// arguments. Both the calldata key and the return bytes are duped and owned
+    /// by the mock; replacing an existing entry frees the old return bytes.
+    pub fn setResponseCalldata(self: *MockChainClient, calldata: []const u8, raw_bytes: []const u8) !void {
+        const val_copy = try self.allocator.dupe(u8, raw_bytes);
+        errdefer self.allocator.free(val_copy);
+
+        // Replace the value in place when the calldata is already registered,
+        // reusing the owned key.
+        if (self.responses_by_calldata.getPtr(calldata)) |value_ptr| {
+            self.allocator.free(value_ptr.*);
+            value_ptr.* = val_copy;
+            return;
+        }
+
+        // New entry: own a copy of the calldata as the key.
+        const key_copy = try self.allocator.dupe(u8, calldata);
+        errdefer self.allocator.free(key_copy);
+        try self.responses_by_calldata.put(key_copy, val_copy);
+    }
+
     /// Convenience wrapper over `setResponse` that decodes a hex string (with
     /// or without a `0x` prefix) into bytes first.
     pub fn setResponseHex(self: *MockChainClient, selector: [4]u8, hex: []const u8) !void {
@@ -137,6 +179,10 @@ pub const MockChainClient = struct {
         _ = to;
         const self: *MockChainClient = @ptrCast(@alignCast(ptr));
         if (data.len < 4) return MockError.NoMockResponse;
+        // Exact-calldata match wins over the selector-level fallback.
+        if (self.responses_by_calldata.get(data)) |stored| {
+            return allocator.dupe(u8, stored);
+        }
         const sel: [4]u8 = data[0..4].*;
         const stored = self.responses.get(sel) orelse return MockError.NoMockResponse;
         // Return a fresh copy owned by the caller's allocator, matching the eth
@@ -164,8 +210,11 @@ pub const MockChainClient = struct {
             // A missing selector mirrors a failed on-chain call: success=false,
             // empty bytes.
             if (c.data.len >= 4) {
-                const sel: [4]u8 = c.data[0..4].*;
-                if (self.responses.get(sel)) |stored| {
+                // Exact-calldata match wins over the selector-level fallback; a
+                // miss in both mirrors a reverting call (success=false).
+                if (self.responses_by_calldata.get(c.data)) |stored| {
+                    out[i] = .{ .success = true, .bytes = try allocator.dupe(u8, stored) };
+                } else if (self.responses.get(c.data[0..4].*)) |stored| {
                     out[i] = .{ .success = true, .bytes = try allocator.dupe(u8, stored) };
                 } else {
                     out[i] = .{ .success = false, .bytes = try allocator.alloc(u8, 0) };
