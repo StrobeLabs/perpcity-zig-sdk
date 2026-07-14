@@ -47,6 +47,11 @@ pub const ChainClient = struct {
         /// `from` is load-bearing -- an eth_call from address(0) falsely reverts
         /// on sender-dependent writes (e.g. ERC20 approve from the zero address).
         simulate: *const fn (ptr: *anyopaque, to: [20]u8, data: []const u8, from: [20]u8) anyerror!void,
+        /// eth_getLogs: fetch the logs matching `filter`. Returns the raw
+        /// `eth.receipt.Log` slice (each log's `topics`/`data` allocated with
+        /// the passed allocator); the caller owns it and frees it with
+        /// `freeLogs`.
+        getLogs: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, filter: eth.json_rpc.LogFilter) anyerror![]eth.receipt.Log,
     };
 
     pub fn call(self: *ChainClient, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) ![]u8 {
@@ -71,6 +76,10 @@ pub const ChainClient = struct {
 
     pub fn simulate(self: *ChainClient, to: [20]u8, data: []const u8, from: [20]u8) !void {
         return self.vtable.simulate(self.ptr, to, data, from);
+    }
+
+    pub fn getLogs(self: *ChainClient, allocator: std.mem.Allocator, filter: eth.json_rpc.LogFilter) ![]eth.receipt.Log {
+        return self.vtable.getLogs(self.ptr, allocator, filter);
     }
 };
 
@@ -149,6 +158,13 @@ pub fn freeBatchResults(results: []ChainClient.BatchResult, allocator: std.mem.A
     allocator.free(results);
 }
 
+/// Free the slice returned by `ChainClient.getLogs`, including each log's
+/// owned `topics` and `data`. Delegates to eth.zig's log-freeing helper so the
+/// alloc/free discipline stays identical to the production `getLogs` path.
+pub fn freeLogs(logs: []eth.receipt.Log, allocator: std.mem.Allocator) void {
+    eth.log_watcher.freeLogs(allocator, logs);
+}
+
 // ---------------------------------------------------------------------------
 // Production implementation
 // ---------------------------------------------------------------------------
@@ -221,6 +237,7 @@ pub const EthChainClient = struct {
         .address = ethAddress,
         .callBatch = ethCallBatch,
         .simulate = ethSimulate,
+        .getLogs = ethGetLogs,
     };
 
     fn ethCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -255,6 +272,16 @@ pub const EthChainClient = struct {
         // revert preflight; the returned gas estimate is discarded.
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
         _ = try self.provider.estimateGas(to, data, from);
+    }
+
+    fn ethGetLogs(ptr: *anyopaque, allocator: std.mem.Allocator, filter: eth.json_rpc.LogFilter) anyerror![]eth.receipt.Log {
+        // The provider allocates the returned logs (topics/data) with its own
+        // allocator, which is the same allocator used to construct this client
+        // and to run `pollEvents`, so the caller can free with `allocator` via
+        // `freeLogs`.
+        _ = allocator;
+        const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+        return self.provider.getLogs(filter);
     }
 
     fn ethCallBatch(

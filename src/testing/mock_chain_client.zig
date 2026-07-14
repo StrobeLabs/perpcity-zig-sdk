@@ -35,6 +35,10 @@ pub const MockChainClient = struct {
     /// preflight ran from the caller's wallet (not address(0)). Null until the
     /// first `simulate`.
     last_simulate_from: ?[20]u8 = null,
+    /// Canned logs returned by every `getLogs` (the filter is ignored). Set via
+    /// `setLogs`; the mock owns this deep copy and frees it on `deinit`. Null
+    /// (the default) makes `getLogs` return an empty slice.
+    logs: ?[]eth.receipt.Log = null,
 
     pub const MockError = error{NoMockResponse};
 
@@ -59,6 +63,8 @@ pub const MockChainClient = struct {
         self.sent.deinit(self.allocator);
 
         if (self.receipt) |r| freeReceipt(self.allocator, r);
+
+        if (self.logs) |ls| eth.log_watcher.freeLogs(self.allocator, ls);
     }
 
     /// Supply the canned receipt returned by `getReceipt`. The mock takes
@@ -68,6 +74,15 @@ pub const MockChainClient = struct {
     pub fn setReceipt(self: *MockChainClient, receipt: eth.receipt.TransactionReceipt) void {
         if (self.receipt) |old| freeReceipt(self.allocator, old);
         self.receipt = receipt;
+    }
+
+    /// Supply the canned logs returned by `getLogs`. The mock deep-copies the
+    /// logs (topics/data) into its own memory and frees them on `deinit`.
+    /// Replacing a previously set set of logs frees the old copy first.
+    pub fn setLogs(self: *MockChainClient, logs: []const eth.receipt.Log) !void {
+        const copy = try dupeLogs(self.allocator, logs);
+        if (self.logs) |old| eth.log_watcher.freeLogs(self.allocator, old);
+        self.logs = copy;
     }
 
     /// Convenience accessor for the most recently recorded `sendTransaction`.
@@ -115,6 +130,7 @@ pub const MockChainClient = struct {
         .address = mockAddress,
         .callBatch = mockCallBatch,
         .simulate = mockSimulate,
+        .getLogs = mockGetLogs,
     };
 
     fn mockCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -160,6 +176,16 @@ pub const MockChainClient = struct {
             filled = i + 1;
         }
         return out;
+    }
+
+    fn mockGetLogs(ptr: *anyopaque, allocator: std.mem.Allocator, filter: eth.json_rpc.LogFilter) anyerror![]eth.receipt.Log {
+        // The filter is ignored: the mock returns a fresh deep copy of the
+        // caller-set canned logs (or an empty slice if none were set), owned by
+        // the caller's allocator and freed via `chain_client.freeLogs`.
+        _ = filter;
+        const self: *MockChainClient = @ptrCast(@alignCast(ptr));
+        const src = self.logs orelse return allocator.alloc(eth.receipt.Log, 0);
+        return dupeLogs(allocator, src);
     }
 
     fn mockSendTransaction(ptr: *anyopaque, to: [20]u8, data: []const u8, value: u256) anyerror![32]u8 {
@@ -255,6 +281,47 @@ pub fn makeOpenReceipt(
         .contract_address = null,
         .type_ = 2,
     };
+}
+
+/// Deep-copy a slice of logs (including each log's `topics` and `data`) with
+/// `allocator`. The copy mirrors eth.zig's own allocation discipline (`data`
+/// always allocated, `topics` allocated only when non-empty), so it frees
+/// cleanly with `eth.log_watcher.freeLogs` / `chain_client.freeLogs`.
+fn dupeLogs(allocator: std.mem.Allocator, logs: []const eth.receipt.Log) ![]eth.receipt.Log {
+    const out = try allocator.alloc(eth.receipt.Log, logs.len);
+    var filled: usize = 0;
+    errdefer {
+        for (out[0..filled]) |l| {
+            allocator.free(l.data);
+            if (l.topics.len > 0) allocator.free(l.topics);
+        }
+        allocator.free(out);
+    }
+
+    for (logs, 0..) |src, i| {
+        const topics: []const [32]u8 = if (src.topics.len > 0)
+            try allocator.dupe([32]u8, src.topics)
+        else
+            &.{};
+        errdefer if (topics.len > 0) allocator.free(topics);
+
+        const data = try allocator.dupe(u8, src.data);
+
+        out[i] = .{
+            .address = src.address,
+            .topics = topics,
+            .data = data,
+            .block_number = src.block_number,
+            .transaction_hash = src.transaction_hash,
+            .transaction_index = src.transaction_index,
+            .log_index = src.log_index,
+            .block_hash = src.block_hash,
+            .removed = src.removed,
+        };
+        filled = i + 1;
+    }
+
+    return out;
 }
 
 /// Free the slices owned by a receipt built with `makeOpenReceipt`.
