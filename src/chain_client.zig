@@ -257,6 +257,14 @@ pub const EthChainClient = struct {
     kms_signer: ?*eth.signer.KmsSigner = null,
     /// Owned copy of the KMS key id (the signer borrows it), freed on `destroy`.
     kms_key_id: ?[]u8 = null,
+    /// Multi-endpoint read provider with health tracking + failover, when built
+    /// via `createWithFallback`; null for the single-endpoint path. When set,
+    /// the READ methods (`call`/`getLogs`/`simulate`) route through it; writes,
+    /// `callBatch`, and `callRaw` stay on the primary `provider`.
+    fallback: ?*eth.fallback_provider.FallbackProvider = null,
+    /// Owned copies of the fallback endpoint URLs (the provider borrows them),
+    /// freed on `destroy` after the fallback provider.
+    fallback_urls: ?[][]const u8 = null,
 
     /// Allocate and wire the eth.zig objects on the heap. Returns the heap
     /// pointer -- keep it and hand out `ChainClient`s via `client()`.
@@ -339,8 +347,67 @@ pub const EthChainClient = struct {
         return self;
     }
 
+    /// Like `create`, but routes the READ path through a multi-endpoint
+    /// `FallbackProvider` (health tracking + failover + recovery probing) over
+    /// `rpc_urls`, ordered by preference. Writes/`callBatch`/`callRaw` still use
+    /// the primary endpoint (`rpc_urls[0]`); a liquidation bot's high-frequency
+    /// detection reads (`eth_call`/`eth_getLogs`) get the resilience.
+    ///
+    /// `opts` tunes the failover threshold and recovery-probe interval. The
+    /// endpoint URLs are copied and owned by the client.
+    pub fn createWithFallback(
+        allocator: std.mem.Allocator,
+        rpc_urls: []const []const u8,
+        private_key: [32]u8,
+        opts: eth.fallback_provider.FallbackOpts,
+    ) !*EthChainClient {
+        if (rpc_urls.len == 0) return error.NoEndpoints;
+
+        const self = try allocator.create(EthChainClient);
+        errdefer allocator.destroy(self);
+
+        // Standalone primary (writes + batch + raw), on the preferred endpoint.
+        const transport = try allocator.create(eth.http_transport.HttpTransport);
+        errdefer allocator.destroy(transport);
+        transport.* = eth.http_transport.HttpTransport.init(allocator, rpc_urls[0], eth.runtime.blockingIo());
+        errdefer transport.deinit();
+
+        const provider = try allocator.create(eth.provider.Provider);
+        errdefer allocator.destroy(provider);
+        provider.* = eth.provider.Provider.init(allocator, transport);
+
+        const wallet = try allocator.create(eth.wallet.Wallet);
+        errdefer allocator.destroy(wallet);
+        wallet.* = eth.wallet.Wallet.initLocal(allocator, private_key, provider);
+
+        // Own copies of the endpoint URLs (the fallback provider borrows them).
+        const owned = try allocator.alloc([]const u8, rpc_urls.len);
+        errdefer allocator.free(owned);
+        var duped: usize = 0;
+        errdefer for (owned[0..duped]) |u| allocator.free(u);
+        for (rpc_urls, 0..) |u, i| {
+            owned[i] = try allocator.dupe(u8, u);
+            duped = i + 1;
+        }
+
+        const fallback = try allocator.create(eth.fallback_provider.FallbackProvider);
+        errdefer allocator.destroy(fallback);
+        fallback.* = try eth.fallback_provider.FallbackProvider.init(allocator, owned, eth.runtime.blockingIo(), opts);
+        errdefer fallback.deinit();
+
+        self.* = .{
+            .allocator = allocator,
+            .transport = transport,
+            .provider = provider,
+            .wallet = wallet,
+            .fallback = fallback,
+            .fallback_urls = owned,
+        };
+        return self;
+    }
+
     /// Tear down the wallet/transport and free every heap allocation, including
-    /// `self` and (when signing via KMS) the KMS signer.
+    /// `self`, the KMS signer (if any), and the fallback provider (if any).
     pub fn destroy(self: *EthChainClient) void {
         self.wallet.deinit();
         self.transport.deinit();
@@ -349,6 +416,15 @@ pub const EthChainClient = struct {
             self.allocator.destroy(ks);
         }
         if (self.kms_key_id) |kid| self.allocator.free(kid);
+        // Free the fallback provider before its borrowed URLs.
+        if (self.fallback) |fb| {
+            fb.deinit();
+            self.allocator.destroy(fb);
+        }
+        if (self.fallback_urls) |urls| {
+            for (urls) |u| self.allocator.free(u);
+            self.allocator.free(urls);
+        }
         self.allocator.destroy(self.wallet);
         self.allocator.destroy(self.provider);
         self.allocator.destroy(self.transport);
@@ -379,6 +455,7 @@ pub const EthChainClient = struct {
         // the read helper, so the caller can free with `allocator`.
         _ = allocator;
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+        if (self.fallback) |fb| return fb.call(to, data);
         return self.provider.call(to, data);
     }
 
@@ -404,6 +481,10 @@ pub const EthChainClient = struct {
         // `from` and errors iff the tx would revert, so it is the from-aware
         // revert preflight; the returned gas estimate is discarded.
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+        if (self.fallback) |fb| {
+            _ = try fb.estimateGas(to, data, from);
+            return;
+        }
         _ = try self.provider.estimateGas(to, data, from);
     }
 
@@ -414,6 +495,7 @@ pub const EthChainClient = struct {
         // `freeLogs`.
         _ = allocator;
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+        if (self.fallback) |fb| return fb.getLogs(filter);
         return self.provider.getLogs(filter);
     }
 

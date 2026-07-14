@@ -30,6 +30,38 @@ test "EthChainClient raw-key create/destroy is leak-clean and has no KMS signer"
     try std.testing.expect(!all_zero);
 }
 
+// createWithFallback constructs without any network call (transports connect
+// lazily), so this regression-guards the fallback allocation/free discipline:
+// the provider + owned URL copies must free cleanly under the testing allocator.
+test "createWithFallback builds a multi-endpoint read client, leak-clean" {
+    const alloc = std.testing.allocator;
+    const private_key = [_]u8{0x22} ** 32;
+    const urls = [_][]const u8{ "http://primary:8545", "http://backup:8545" };
+
+    const ec = try EthChainClient.createWithFallback(alloc, &urls, private_key, .{});
+    defer ec.destroy();
+
+    try std.testing.expect(ec.fallback != null);
+    try std.testing.expect(ec.fallback_urls != null);
+    try std.testing.expectEqual(@as(usize, 2), ec.fallback_urls.?.len);
+    // The URLs are owned copies, not the caller's slices.
+    try std.testing.expect(ec.fallback_urls.?[0].ptr != urls[0].ptr);
+    try std.testing.expectEqualStrings("http://primary:8545", ec.fallback_urls.?[0]);
+}
+
+test "createWithFallback accepts a single endpoint and rejects an empty list" {
+    const alloc = std.testing.allocator;
+    const private_key = [_]u8{0x33} ** 32;
+
+    const one = [_][]const u8{"http://only:8545"};
+    const ec = try EthChainClient.createWithFallback(alloc, &one, private_key, .{});
+    defer ec.destroy();
+    try std.testing.expectEqual(@as(usize, 1), ec.fallback_urls.?.len);
+
+    const empty = [_][]const u8{};
+    try std.testing.expectError(error.NoEndpoints, EthChainClient.createWithFallback(alloc, &empty, private_key, .{}));
+}
+
 // The KMS constructors' exact signatures are asserted at compile time, so a
 // change to parameter order/types or the return payload breaks the build. They
 // are not invoked: KmsSigner.init calls kms:GetPublicKey (a network call needing

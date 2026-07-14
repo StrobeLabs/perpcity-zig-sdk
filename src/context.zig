@@ -108,6 +108,30 @@ pub const PerpCityContext = struct {
         };
     }
 
+    /// Like `init`, but routes the READ path through a multi-endpoint fallback
+    /// provider over `rpc_urls` (ordered by preference), with health tracking,
+    /// failover, and recovery probing. Writes stay on the primary endpoint.
+    /// `opts` tunes the failover threshold / recovery-probe interval.
+    pub fn initWithFallback(
+        allocator: std.mem.Allocator,
+        rpc_urls: []const []const u8,
+        private_key: [32]u8,
+        opts: eth.fallback_provider.FallbackOpts,
+        deployments: types.PerpCityDeployments,
+    ) !Self {
+        const ec = try EthChainClient.createWithFallback(allocator, rpc_urls, private_key, opts);
+        return Self{
+            .allocator = allocator,
+            .client = ec.client(),
+            .eth_client = ec,
+            .deployments = deployments,
+            .approved_perps = std.AutoHashMap(types.Address, void).init(allocator),
+            .config_cache = std.AutoHashMap(types.Address, CacheEntry).init(allocator),
+            .state_cache = state_cache_mod.StateCache.init(allocator, .{}),
+            .rpc_url = rpc_urls[0],
+        };
+    }
+
     /// Build a context around an already-constructed `ChainClient` (for tests
     /// with an in-memory mock). The context does not own the client, so
     /// `deinit` leaves it alone (`eth_client` is null).
