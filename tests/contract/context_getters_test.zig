@@ -158,6 +158,52 @@ test "getTakerDetails decodes the two util-payment checkpoints" {
 }
 
 // ---------------------------------------------------------------------------
+// getPositionOwner / getPositionBalance -- ERC721 ownerOf(uint256) / balanceOf(address)
+// ---------------------------------------------------------------------------
+
+test "getPositionOwner decodes the ERC721 owner of a live position" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+
+    const owner = addr(0xA1);
+    try setReturn(&mock, perp_abi.owner_of_selector, &.{.{ .address = owner }});
+
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    const got = try ctx.getPositionOwner(addr(0xBE), 42);
+    try std.testing.expectEqualSlices(u8, &owner, &got);
+}
+
+test "getPositionOwner surfaces the revert for a closed/nonexistent position" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+
+    // No ownerOf response registered: the mock stands in for a reverting call,
+    // as Solady ERC721 ownerOf reverts for a never-minted or burned token.
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    try std.testing.expectError(error.NoMockResponse, ctx.getPositionOwner(addr(0xBE), 999));
+}
+
+test "getPositionBalance decodes the ERC721 position count for an owner" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+
+    try setReturn(&mock, perp_abi.balance_of_selector, &.{.{ .uint256 = 3 }});
+
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    const n = try ctx.getPositionBalance(addr(0xBE), addr(0xA1));
+    try std.testing.expectEqual(@as(u256, 3), n);
+}
+
+// ---------------------------------------------------------------------------
 // getSolvencyState -- solvencyState()
 // ---------------------------------------------------------------------------
 

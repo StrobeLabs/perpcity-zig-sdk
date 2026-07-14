@@ -378,6 +378,34 @@ pub const protocol_fee: Function = .{
 };
 pub const protocol_fee_selector = keccak.selector("protocolFee()");
 
+// ERC721 position-ownership views. Positions are ERC721 NFTs minted by the Perp
+// (Solady ERC721 base). The Perp is NOT ERC721Enumerable, so on-chain
+// enumeration is unavailable; discover position IDs via events (see events.zig)
+// and use these to confirm live ownership on-chain.
+pub const owner_of: Function = .{
+    .name = "ownerOf",
+    .state_mutability = .view,
+    .inputs = &.{
+        .{ .name = "id", .abi_type = .uint256 },
+    },
+    .outputs = &.{
+        .{ .name = "owner", .abi_type = .address },
+    },
+};
+pub const owner_of_selector = keccak.selector("ownerOf(uint256)");
+
+pub const balance_of: Function = .{
+    .name = "balanceOf",
+    .state_mutability = .view,
+    .inputs = &.{
+        .{ .name = "owner", .abi_type = .address },
+    },
+    .outputs = &.{
+        .{ .name = "result", .abi_type = .uint256 },
+    },
+};
+pub const balance_of_selector = keccak.selector("balanceOf(address)");
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
