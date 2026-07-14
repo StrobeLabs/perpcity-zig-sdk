@@ -9,6 +9,9 @@ const chain_client = @import("chain_client.zig");
 const event_decode = @import("event_decode.zig");
 const revert_mod = @import("revert.zig");
 const multicall_mod = @import("multicall.zig");
+const nonce_mod = @import("nonce.zig");
+const gas_mod = @import("gas.zig");
+const tx_pipeline_mod = @import("tx_pipeline.zig");
 const perp_abi = @import("abi/perp_abi.zig");
 const fees_abi = @import("abi/fees_abi.zig");
 const margin_ratios_abi = @import("abi/margin_ratios_abi.zig");
@@ -42,6 +45,26 @@ pub const SimOutcome = union(enum) {
     }
 };
 
+/// A managed write request: target, calldata, value, gas ceiling, and urgency
+/// (which scales the EIP-1559 fees). Re-exported from `tx_pipeline`.
+pub const TxRequest = tx_pipeline_mod.TxRequest;
+/// The `(tx_hash, nonce)` of a submitted managed write.
+pub const TxResult = tx_pipeline_mod.TxResult;
+/// Managed-write pipeline tuning (max in-flight, stuck timeout).
+pub const TxPipelineConfig = tx_pipeline_mod.TxPipelineConfig;
+/// Gas-cache tuning (TTL, default tip).
+pub const GasCacheConfig = gas_mod.GasCacheConfig;
+/// EIP-1559 fee urgency (low/normal/high/critical) for a managed write.
+pub const Urgency = gas_mod.Urgency;
+
+/// Heap-owned bundle backing the managed write path. Held on the heap so the
+/// `TxPipeline`'s pointers into `nonce_mgr` / `gas_cache` stay stable.
+const ManagedWrites = struct {
+    nonce_mgr: nonce_mod.HftNonceManager,
+    gas_cache: gas_mod.GasCache,
+    pipeline: tx_pipeline_mod.TxPipeline,
+};
+
 /// Main client context for interacting with the PerpCity v0.1.0 protocol.
 pub const PerpCityContext = struct {
     allocator: std.mem.Allocator,
@@ -58,6 +81,9 @@ pub const PerpCityContext = struct {
     config_cache: std.AutoHashMap(types.Address, CacheEntry),
     state_cache: state_cache_mod.StateCache,
     rpc_url: []const u8,
+    /// The managed-write pipeline, when enabled via `enableManagedWrites`; null
+    /// otherwise. `deinit` tears it down.
+    managed: ?*ManagedWrites = null,
 
     const Self = @This();
 
@@ -156,6 +182,11 @@ pub const PerpCityContext = struct {
         self.state_cache.deinit();
         self.config_cache.deinit();
         self.approved_perps.deinit();
+        if (self.managed) |mw| {
+            mw.pipeline.deinit();
+            mw.nonce_mgr.deinit();
+            self.allocator.destroy(mw);
+        }
         if (self.eth_client) |ec| ec.destroy();
     }
 
@@ -752,6 +783,98 @@ pub const PerpCityContext = struct {
         const raw = try self.client.call(self.allocator, multicall_mod.MULTICALL3_ADDRESS, calldata);
         defer self.allocator.free(raw);
         return multicall_mod.decodeResults(self.allocator, raw);
+    }
+
+    // -----------------------------------------------------------------
+    // Managed write path (nonce/gas pipeline + stuck-tx gas-bump resends)
+    // -----------------------------------------------------------------
+
+    /// Enable the managed write path: a `TxPipeline` that assigns the nonce and
+    /// EIP-1559 gas with no RPC on the hot path and supports same-nonce gas-bump
+    /// resends of a stuck transaction. `starting_nonce` is the sender's current
+    /// on-chain nonce; keep the base fee current via `refreshBaseFee` (from a
+    /// block header) before sending. All timing is via explicit `now_ms` (no OS
+    /// clock in lib code).
+    pub fn enableManagedWrites(
+        self: *Self,
+        starting_nonce: u64,
+        gas_config: GasCacheConfig,
+        config: TxPipelineConfig,
+    ) !void {
+        if (self.managed != null) return error.ManagedWritesAlreadyEnabled;
+        const mw = try self.allocator.create(ManagedWrites);
+        errdefer self.allocator.destroy(mw);
+        mw.nonce_mgr = nonce_mod.HftNonceManager.init(self.allocator, starting_nonce);
+        mw.gas_cache = gas_mod.GasCache.init(gas_config);
+        // The pipeline borrows &mw.nonce_mgr / &mw.gas_cache; mw is heap-stable.
+        mw.pipeline = tx_pipeline_mod.TxPipeline.init(self.allocator, &mw.nonce_mgr, &mw.gas_cache, config);
+        self.managed = mw;
+    }
+
+    /// Feed the latest block base fee into the managed gas cache (e.g. from a
+    /// `PerpEventWatcher`/block header), so `sendManaged` resolves fees without
+    /// an `eth_gasPrice` RPC. No-op when managed writes are not enabled.
+    pub fn refreshBaseFee(self: *Self, base_fee: u64, now_ms: i64) void {
+        if (self.managed) |mw| mw.gas_cache.updateFromBlock(base_fee, now_ms);
+    }
+
+    /// Submit a write through the managed pipeline: acquire a nonce and resolve
+    /// gas (no RPC), sign+send with those explicit values, and track it in
+    /// flight. Returns the `(tx_hash, nonce)`. Errors `GasPriceUnavailable` if
+    /// the base fee is stale/unset (call `refreshBaseFee` first) and
+    /// `TooManyInFlight` at the configured cap; a send failure releases the
+    /// nonce so it is not skipped.
+    pub fn sendManaged(self: *Self, request: TxRequest, now_ms: i64) !TxResult {
+        const mw = self.managed orelse return error.ManagedWritesNotEnabled;
+        const prepared = try mw.pipeline.prepare(request, now_ms);
+        const hash = self.client.sendManaged(request.to, request.calldata, request.value, .{
+            .nonce = prepared.nonce,
+            .gas_limit = prepared.gas_limit,
+            .max_fee_per_gas = prepared.gas_fees.max_fee_per_gas,
+            .max_priority_fee_per_gas = prepared.gas_fees.max_priority_fee,
+        }) catch |e| {
+            // The tx never entered the mempool; give the nonce back so the next
+            // send does not gap.
+            mw.nonce_mgr.releaseNonce(prepared.nonce);
+            return e;
+        };
+        try mw.pipeline.recordSubmission(hash, prepared, now_ms);
+        return .{ .tx_hash = hash, .nonce = prepared.nonce };
+    }
+
+    /// The tx hashes that have been in flight past the pipeline's stuck timeout.
+    /// Caller owns the returned slice (`allocator.free`). Feed each into
+    /// `resendBumped`.
+    pub fn stuckWrites(self: *Self, now_ms: i64) ![][32]u8 {
+        const mw = self.managed orelse return error.ManagedWritesNotEnabled;
+        return mw.pipeline.getStuckTxs(now_ms);
+    }
+
+    /// Resend a stuck write at the SAME nonce with the fees scaled by
+    /// `multiplier` (the EIP-1559 replacement rule), returning the new tx hash.
+    /// `request` is the original request (the caller retains it; the pipeline's
+    /// bump params carry only nonce + fees). The original stays the in-flight
+    /// tracker -- when either version mines, call `confirmWrite`/`failWrite` on
+    /// the original hash. Errors `TxNotInFlight` if the original is unknown.
+    pub fn resendBumped(self: *Self, request: TxRequest, original_tx_hash: [32]u8, multiplier: u64) ![32]u8 {
+        const mw = self.managed orelse return error.ManagedWritesNotEnabled;
+        const bump = mw.pipeline.prepareBump(original_tx_hash, multiplier) orelse return error.TxNotInFlight;
+        return self.client.sendManaged(request.to, request.calldata, request.value, .{
+            .nonce = bump.nonce,
+            .gas_limit = bump.gas_limit,
+            .max_fee_per_gas = bump.new_max_fee,
+            .max_priority_fee_per_gas = bump.new_max_priority_fee,
+        });
+    }
+
+    /// Mark a managed write mined: drop it from in-flight and confirm its nonce.
+    pub fn confirmWrite(self: *Self, tx_hash: [32]u8) void {
+        if (self.managed) |mw| mw.pipeline.confirmTx(tx_hash);
+    }
+
+    /// Mark a managed write failed: drop it and release its nonce for reuse.
+    pub fn failWrite(self: *Self, tx_hash: [32]u8) void {
+        if (self.managed) |mw| mw.pipeline.failTx(tx_hash);
     }
 
     // -----------------------------------------------------------------

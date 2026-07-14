@@ -57,6 +57,10 @@ pub const MockChainClient = struct {
     /// True iff the most recent `callRaw` was passed a non-null `overrides`, so
     /// tests can assert the state-override path was taken.
     last_callraw_had_overrides: bool = false,
+    /// The explicit nonce + gas of the most recent `sendManaged`, so tests can
+    /// assert the pipeline-resolved values (and that a bump resend reused the
+    /// nonce at higher fees). Null until the first `sendManaged`.
+    last_managed: ?ChainClient.SendParams = null,
 
     pub const MockError = error{NoMockResponse};
 
@@ -198,6 +202,7 @@ pub const MockChainClient = struct {
         .simulate = mockSimulate,
         .getLogs = mockGetLogs,
         .callRaw = mockCallRaw,
+        .sendManaged = mockSendManaged,
     };
 
     fn mockCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -289,6 +294,15 @@ pub const MockChainClient = struct {
         const data_copy = try self.allocator.dupe(u8, data);
         errdefer self.allocator.free(data_copy);
         try self.sent.append(self.allocator, .{ .to = to, .data = data_copy, .value = value });
+        return self.next_hash;
+    }
+
+    fn mockSendManaged(ptr: *anyopaque, to: [20]u8, data: []const u8, value: u256, params: ChainClient.SendParams) anyerror![32]u8 {
+        const self: *MockChainClient = @ptrCast(@alignCast(ptr));
+        const data_copy = try self.allocator.dupe(u8, data);
+        errdefer self.allocator.free(data_copy);
+        try self.sent.append(self.allocator, .{ .to = to, .data = data_copy, .value = value });
+        self.last_managed = params;
         return self.next_hash;
     }
 

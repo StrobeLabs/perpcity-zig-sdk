@@ -15,4 +15,5 @@ comptime {
     _ = @import("contract/context_multicall_test.zig");
     _ = @import("contract/chain_client_test.zig");
     _ = @import("contract/watcher_test.zig");
+    _ = @import("contract/context_managed_write_test.zig");
 }
