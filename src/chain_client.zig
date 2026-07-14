@@ -36,12 +36,26 @@ pub const ChainClient = struct {
         reverted: []u8,
     };
 
+    /// Explicit nonce + EIP-1559 gas for a managed send (`sendManaged`), so a
+    /// caller-owned `TxPipeline` controls nonce/gas instead of the wallet
+    /// filling them from RPC. Enables same-nonce gas-bump resends.
+    pub const SendParams = struct {
+        nonce: u64,
+        gas_limit: u64,
+        max_fee_per_gas: u256,
+        max_priority_fee_per_gas: u256,
+    };
+
     pub const VTable = struct {
         /// eth_call; returns the raw ABI return bytes. Caller owns the slice
         /// (freed with the passed allocator by the read helper).
         call: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8,
         /// Sign + broadcast a transaction; returns the transaction hash.
         sendTransaction: *const fn (ptr: *anyopaque, to: [20]u8, data: []const u8, value: u256) anyerror![32]u8,
+        /// Sign + broadcast with an explicit nonce + EIP-1559 gas (no nonce/gas
+        /// RPC); the managed-write path uses this so a `TxPipeline` owns nonce
+        /// and gas and can bump-resend a stuck tx at the same nonce.
+        sendManaged: *const fn (ptr: *anyopaque, to: [20]u8, data: []const u8, value: u256, params: SendParams) anyerror![32]u8,
         /// Fetch a receipt (null until mined). Caller owns per eth semantics.
         getReceipt: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, tx_hash: [32]u8, max_attempts: u32) anyerror!?eth.receipt.TransactionReceipt,
         /// Signer address.
@@ -81,6 +95,10 @@ pub const ChainClient = struct {
 
     pub fn sendTransaction(self: *ChainClient, to: [20]u8, data: []const u8, value: u256) ![32]u8 {
         return self.vtable.sendTransaction(self.ptr, to, data, value);
+    }
+
+    pub fn sendManaged(self: *ChainClient, to: [20]u8, data: []const u8, value: u256, params: SendParams) ![32]u8 {
+        return self.vtable.sendManaged(self.ptr, to, data, value, params);
     }
 
     pub fn getReceipt(self: *ChainClient, allocator: std.mem.Allocator, tx_hash: [32]u8, max_attempts: u32) !?eth.receipt.TransactionReceipt {
@@ -450,6 +468,7 @@ pub const EthChainClient = struct {
         .simulate = ethSimulate,
         .getLogs = ethGetLogs,
         .callRaw = ethCallRaw,
+        .sendManaged = ethSendManaged,
     };
 
     fn ethCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -465,6 +484,21 @@ pub const EthChainClient = struct {
     fn ethSendTransaction(ptr: *anyopaque, to: [20]u8, data: []const u8, value: u256) anyerror![32]u8 {
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
         return self.wallet.sendTransaction(.{ .to = to, .data = data, .value = value });
+    }
+
+    fn ethSendManaged(ptr: *anyopaque, to: [20]u8, data: []const u8, value: u256, params: ChainClient.SendParams) anyerror![32]u8 {
+        // Every gas/nonce field is explicit, so the wallet makes no nonce/gas
+        // RPCs -- the TxPipeline already resolved them.
+        const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+        return self.wallet.sendTransaction(.{
+            .to = to,
+            .data = data,
+            .value = value,
+            .nonce = params.nonce,
+            .gas_limit = params.gas_limit,
+            .max_fee_per_gas = params.max_fee_per_gas,
+            .max_priority_fee_per_gas = params.max_priority_fee_per_gas,
+        });
     }
 
     fn ethGetReceipt(ptr: *anyopaque, allocator: std.mem.Allocator, tx_hash: [32]u8, max_attempts: u32) anyerror!?eth.receipt.TransactionReceipt {
