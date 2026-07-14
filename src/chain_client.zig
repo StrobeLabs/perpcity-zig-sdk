@@ -42,6 +42,11 @@ pub const ChainClient = struct {
         /// each `bytes` is duped with the passed allocator and owned by the
         /// caller (free the whole slice with `freeBatchResults`).
         callBatch: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, calls: []const BatchCall) anyerror![]BatchResult,
+        /// From-aware revert preflight: run the tx from `from` without sending
+        /// it. Returns normally if it would NOT revert; errors iff it would.
+        /// `from` is load-bearing -- an eth_call from address(0) falsely reverts
+        /// on sender-dependent writes (e.g. ERC20 approve from the zero address).
+        simulate: *const fn (ptr: *anyopaque, to: [20]u8, data: []const u8, from: [20]u8) anyerror!void,
     };
 
     pub fn call(self: *ChainClient, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) ![]u8 {
@@ -62,6 +67,10 @@ pub const ChainClient = struct {
 
     pub fn address(self: *ChainClient) ![20]u8 {
         return self.vtable.address(self.ptr);
+    }
+
+    pub fn simulate(self: *ChainClient, to: [20]u8, data: []const u8, from: [20]u8) !void {
+        return self.vtable.simulate(self.ptr, to, data, from);
     }
 };
 
@@ -101,6 +110,29 @@ pub fn writeContract(
     const calldata = try eth.abi_encode.encodeFunctionCall(allocator, sel, args);
     defer allocator.free(calldata);
     return try client.sendTransaction(to, calldata, value);
+}
+
+/// Simulate a state-changing call from `from`: encode calldata, run the
+/// from-aware preflight, discard the result. Returns normally if the call would
+/// NOT revert; propagates the underlying error (an on-chain revert surfaces as
+/// an error) otherwise.
+///
+/// This is the opt-in revert preflight: callers invoke it before a matching
+/// `writeContract` when they want to learn a tx will revert without spending gas
+/// or burning a nonce. It is never called implicitly on the write path. `from`
+/// must be the caller's wallet address -- a from-less (address(0)) preflight
+/// falsely reverts on any sender-dependent write.
+pub fn simulateContract(
+    client: *ChainClient,
+    allocator: std.mem.Allocator,
+    to: [20]u8,
+    sel: [4]u8,
+    args: []const AbiValue,
+    from: [20]u8,
+) !void {
+    const calldata = try eth.abi_encode.encodeFunctionCall(allocator, sel, args);
+    defer allocator.free(calldata);
+    try client.simulate(to, calldata, from);
 }
 
 /// Free values returned by `readContract`.
@@ -188,6 +220,7 @@ pub const EthChainClient = struct {
         .getReceipt = ethGetReceipt,
         .address = ethAddress,
         .callBatch = ethCallBatch,
+        .simulate = ethSimulate,
     };
 
     fn ethCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -213,6 +246,15 @@ pub const EthChainClient = struct {
     fn ethAddress(ptr: *anyopaque) anyerror![20]u8 {
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
         return self.wallet.address();
+    }
+
+    fn ethSimulate(ptr: *anyopaque, to: [20]u8, data: []const u8, from: [20]u8) anyerror!void {
+        // `provider.call` hardcodes `from = null`, so it runs from address(0)
+        // and sender-dependent writes falsely revert. `estimateGas` takes a
+        // `from` and errors iff the tx would revert, so it is the from-aware
+        // revert preflight; the returned gas estimate is discarded.
+        const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+        _ = try self.provider.estimateGas(to, data, from);
     }
 
     fn ethCallBatch(

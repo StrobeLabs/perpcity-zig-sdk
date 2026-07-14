@@ -23,32 +23,60 @@ fn bytes32ToFixedBytes(data: [32]u8) AbiValue.FixedBytes {
     return fb;
 }
 
+/// The `(to, selector, args)` for a `createPerp` call. Holds the params and the
+/// nested `modules` tuple storage so a single `abiArgs()` builds byte-identical
+/// calldata for both the write path and the `simulate` preflight. The dynamic
+/// `string` args borrow `params`' slices, which the caller owns and must keep
+/// alive for the duration of the call.
+const CreatePerpCall = struct {
+    to: types.Address,
+    selector: [4]u8,
+    modules: [6]AbiValue,
+    params: types.CreatePerpParams,
+
+    fn abiArgs(self: *const CreatePerpCall) [7]AbiValue {
+        return .{
+            .{ .address = self.params.owner },
+            .{ .string = self.params.name },
+            .{ .string = self.params.symbol },
+            .{ .string = self.params.token_uri },
+            .{ .tuple = &self.modules },
+            .{ .uint256 = @as(u256, self.params.ema_window) },
+            .{ .fixed_bytes = bytes32ToFixedBytes(self.params.salt) },
+        };
+    }
+};
+
+fn buildCreatePerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !CreatePerpCall {
+    if (params.ema_window == 0) return FactoryError.EmaWindowTooLow;
+
+    return .{
+        .to = ctx.deployments.perp_factory,
+        .selector = perp_factory_abi.create_perp_selector,
+        .modules = .{
+            .{ .address = params.modules.beacon },
+            .{ .address = params.modules.fees },
+            .{ .address = params.modules.funding },
+            .{ .address = params.modules.margin_ratios },
+            .{ .address = params.modules.price_impact },
+            .{ .address = params.modules.pricing },
+        },
+        .params = params,
+    };
+}
+
 /// Deploys a new Perp market via the factory. Returns the deployed Perp
 /// contract address (decoded from the `PerpCreated` event).
 pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.Address {
-    if (params.ema_window == 0) return FactoryError.EmaWindowTooLow;
+    const c = try buildCreatePerp(ctx, params);
+    const args = c.abiArgs();
 
     const tx_hash = try chain_client.writeContract(
         &ctx.client,
         ctx.allocator,
-        ctx.deployments.perp_factory,
-        perp_factory_abi.create_perp_selector,
-        &.{
-            .{ .address = params.owner },
-            .{ .string = params.name },
-            .{ .string = params.symbol },
-            .{ .string = params.token_uri },
-            .{ .tuple = &.{
-                .{ .address = params.modules.beacon },
-                .{ .address = params.modules.fees },
-                .{ .address = params.modules.funding },
-                .{ .address = params.modules.margin_ratios },
-                .{ .address = params.modules.price_impact },
-                .{ .address = params.modules.pricing },
-            } },
-            .{ .uint256 = @as(u256, params.ema_window) },
-            .{ .fixed_bytes = bytes32ToFixedBytes(params.salt) },
-        },
+        c.to,
+        c.selector,
+        &args,
         0,
     );
 
@@ -73,6 +101,23 @@ pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.
     }
 
     return FactoryError.EventDecodeFailed;
+}
+
+/// Opt-in revert preflight for `createPerp`: encodes the same calldata and runs
+/// it through eth_call. Returns normally if the deployment would not revert;
+/// propagates the revert as an error. Does not send a transaction.
+pub fn simulateCreatePerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !void {
+    const c = try buildCreatePerp(ctx, params);
+    const args = c.abiArgs();
+    const from = try ctx.client.address();
+    return chain_client.simulateContract(
+        &ctx.client,
+        ctx.allocator,
+        c.to,
+        c.selector,
+        &args,
+        from,
+    );
 }
 
 /// Returns true if `perp` was deployed by this factory.
