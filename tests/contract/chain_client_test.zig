@@ -30,13 +30,25 @@ test "EthChainClient raw-key create/destroy is leak-clean and has no KMS signer"
     try std.testing.expect(!all_zero);
 }
 
-// The KMS constructors are referenced here so a signature change breaks the
-// build. They are not invoked: KmsSigner.init calls kms:GetPublicKey (a network
-// call needing AWS credentials), so the KMS signing path is exercised only by
-// integration tests, not CI.
-test "KMS constructors are wired (compile-time reference only)" {
-    const ctx_kms = @TypeOf(sdk.context.PerpCityContext.initWithKms);
-    const ec_kms = @TypeOf(EthChainClient.createWithKms);
-    try std.testing.expect(@typeInfo(ctx_kms) == .@"fn");
-    try std.testing.expect(@typeInfo(ec_kms) == .@"fn");
+// The KMS constructors' exact signatures are asserted at compile time, so a
+// change to parameter order/types or the return payload breaks the build. They
+// are not invoked: KmsSigner.init calls kms:GetPublicKey (a network call needing
+// AWS credentials), so the KMS signing path is exercised by integration, not CI.
+test "KMS constructors have the intended signatures (compile-time)" {
+    const create_info = @typeInfo(@TypeOf(EthChainClient.createWithKms)).@"fn";
+    try std.testing.expectEqual(@as(usize, 4), create_info.params.len);
+    try std.testing.expect(create_info.params[0].type.? == std.mem.Allocator);
+    try std.testing.expect(create_info.params[1].type.? == []const u8); // rpc_url
+    try std.testing.expect(create_info.params[2].type.? == []const u8); // region
+    try std.testing.expect(create_info.params[3].type.? == []const u8); // key_id
+    try std.testing.expect(@typeInfo(create_info.return_type.?).error_union.payload == *EthChainClient);
+
+    const init_info = @typeInfo(@TypeOf(sdk.context.PerpCityContext.initWithKms)).@"fn";
+    try std.testing.expectEqual(@as(usize, 5), init_info.params.len);
+    try std.testing.expect(init_info.params[0].type.? == std.mem.Allocator);
+    try std.testing.expect(init_info.params[1].type.? == []const u8); // rpc_url
+    try std.testing.expect(init_info.params[2].type.? == []const u8); // region
+    try std.testing.expect(init_info.params[3].type.? == []const u8); // key_id
+    try std.testing.expect(init_info.params[4].type.? == sdk.types.PerpCityDeployments);
+    try std.testing.expect(@typeInfo(init_info.return_type.?).error_union.payload == sdk.context.PerpCityContext);
 }
