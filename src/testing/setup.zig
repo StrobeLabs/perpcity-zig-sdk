@@ -21,9 +21,9 @@ pub const AnvilSetup = struct {
     allocator: std.mem.Allocator,
 
     /// Initialize an AnvilSetup in-place. Pass a pointer to a stack/heap-resident
-    /// `AnvilSetup` -- `init` writes through it so the embedded `PerpCityContext`
-    /// can be fixed up at its final address (its provider/transport/wallet hold
-    /// internal pointers to each other that must point at the final struct).
+    /// `AnvilSetup` -- `init` writes through it. The embedded `PerpCityContext`
+    /// owns its eth.zig objects on the heap (via `EthChainClient`), so it needs
+    /// no post-move pointer fixup.
     pub fn init(self: *AnvilSetup, allocator: std.mem.Allocator) !void {
         return initWithPort(self, allocator, AnvilProcess.DEFAULT_PORT);
     }
@@ -37,13 +37,12 @@ pub const AnvilSetup = struct {
         self.contracts = try mock_deployer.deployAll(allocator, self.anvil.rpc_url);
         try mock_deployer.registerModules(allocator, self.anvil.rpc_url, self.contracts);
 
-        self.context = PerpCityContext.init(
+        self.context = try PerpCityContext.init(
             allocator,
             self.anvil.rpc_url,
             mock_deployer.DEPLOYER_PRIVATE_KEY,
             mock_deployer.deploymentsFrom(self.contracts),
         );
-        self.context.fixPointers();
     }
 
     pub fn deinit(self: *AnvilSetup) void {

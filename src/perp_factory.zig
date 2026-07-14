@@ -2,9 +2,9 @@ const std = @import("std");
 const eth = @import("eth");
 const types = @import("types.zig");
 const context_mod = @import("context.zig");
+const chain_client = @import("chain_client.zig");
 const perp_factory_abi = @import("abi/perp_factory_abi.zig");
 
-const contract = eth.contract;
 const AbiValue = eth.abi_encode.AbiValue;
 
 const PerpCityContext = context_mod.PerpCityContext;
@@ -28,9 +28,9 @@ fn bytes32ToFixedBytes(data: [32]u8) AbiValue.FixedBytes {
 pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.Address {
     if (params.ema_window == 0) return FactoryError.EmaWindowTooLow;
 
-    const tx_hash = try contract.contractWrite(
+    const tx_hash = try chain_client.writeContract(
+        &ctx.client,
         ctx.allocator,
-        &ctx.wallet,
         ctx.deployments.perp_factory,
         perp_factory_abi.create_perp_selector,
         &.{
@@ -49,9 +49,10 @@ pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.
             .{ .uint256 = @as(u256, params.ema_window) },
             .{ .fixed_bytes = bytes32ToFixedBytes(params.salt) },
         },
+        0,
     );
 
-    const receipt = (try ctx.wallet.waitForReceipt(tx_hash, 10)) orelse
+    const receipt = (try ctx.client.getReceipt(ctx.allocator, tx_hash, 10)) orelse
         return FactoryError.EventDecodeFailed;
 
     if (receipt.status != 1) return FactoryError.TransactionReverted;
@@ -76,14 +77,14 @@ pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.
 
 /// Returns true if `perp` was deployed by this factory.
 pub fn isPerp(ctx: *PerpCityContext, perp: types.Address) !bool {
-    const result = try contract.contractRead(
+    const result = try chain_client.readContract(
+        &ctx.client,
         ctx.allocator,
-        &ctx.provider,
         ctx.deployments.perp_factory,
         perp_factory_abi.perps_selector,
         &.{.{ .address = perp }},
         &.{.bool},
     );
-    defer contract.freeReturnValues(result, ctx.allocator);
+    defer chain_client.freeReturnValues(result, ctx.allocator);
     return result[0].boolean;
 }

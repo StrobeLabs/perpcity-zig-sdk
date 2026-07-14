@@ -43,6 +43,29 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
+    // Contract-layer tests -- exercise the read path through the ChainClient
+    // seam with an in-memory mock (no network / Anvil). Needs eth for ABI
+    // encoding of canned return bytes.
+    const contract_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/contract_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    contract_test_mod.addImport("perpcity_sdk", sdk_module);
+    contract_test_mod.addImport("eth", eth_module);
+
+    const contract_tests = b.addTest(.{
+        .root_module = contract_test_mod,
+    });
+
+    const run_contract_tests = b.addRunArtifact(contract_tests);
+    const contract_step = b.step("contract-test", "Run contract-layer unit tests (in-memory mock, no network)");
+    contract_step.dependOn(&run_contract_tests.step);
+
+    // The mock runs entirely in-process, so the default `test` step covers the
+    // contract-layer tests too (CI's `zig build test` picks them up).
+    test_step.dependOn(&run_contract_tests.step);
+
     // Integration tests -- needs eth for contract interaction
     const integration_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/integration_tests.zig"),
