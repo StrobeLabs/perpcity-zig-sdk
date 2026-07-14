@@ -4,4 +4,5 @@
 // seam with an in-memory mock -- no network or Anvil required.
 comptime {
     _ = @import("contract/context_read_test.zig");
+    _ = @import("contract/context_getters_test.zig");
 }
