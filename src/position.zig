@@ -87,33 +87,43 @@ pub fn entryPrice(raw: types.PositionRawData) f64 {
 
 /// Estimated liquidation price for a position, in human price units.
 ///
-/// `effective_margin` (human USDC) overrides the stored margin when the caller
-/// already knows the funding-adjusted margin; pass `null` to use `raw.margin`.
-/// Returns `null` when the position has no size, non-positive margin, or (for
-/// longs) a liquidation margin ratio >= 100% (no positive liquidation price).
+/// `settled_margin` (human USDC) is the position's *settled* margin -- the stored
+/// margin plus pending funding and pending utilization fees. Pass the settled
+/// value for an accurate estimate; `null` falls back to `raw.margin`, which
+/// ignores those pending settlements and is only a rough approximation.
 ///
-/// The contract defines the margin ratio as `equity / value`, where `value` is
-/// the position's *current* notional (`size * price`). Solving
-/// `equity == liq_ratio * size * liq_price` at the liquidation price gives:
-///   long:  (entry - margin/size) / (1 - liq_ratio)
-///   short: (entry + margin/size) / (1 + liq_ratio)
+/// `liq_fee_ratio` is the liquidation fee as a fraction of notional
+/// (`IFees.liqFee() / 1e6`); pass 0 to ignore it.
+///
+/// The margin ratio is `equity / value` on the position's *current* notional
+/// (`size * price`), and at liquidation the position must also cover the
+/// liquidation fee, so the effective maintenance threshold is
+/// `liq_ratio + liq_fee_ratio`. Solving
+/// `equity == (liq_ratio + liq_fee_ratio) * size * liq_price`:
+///   long:  (entry - settled_margin/size) / (1 - (liq_ratio + liq_fee_ratio))
+///   short: (entry + settled_margin/size) / (1 + (liq_ratio + liq_fee_ratio))
+///
+/// Returns `null` when the position has no size, non-positive margin, or (for
+/// longs) a combined threshold >= 100% (no positive liquidation price).
 pub fn liquidationPrice(
     raw: types.PositionRawData,
     is_long: bool,
-    effective_margin: ?f64,
+    settled_margin: ?f64,
+    liq_fee_ratio: f64,
 ) ?f64 {
     const entry = entryPrice(raw);
     const size = @abs(positionSize(raw));
-    const margin = effective_margin orelse marginHuman(raw);
+    const margin = settled_margin orelse marginHuman(raw);
     if (size == 0.0 or margin <= 0.0) return null;
 
     const liq_ratio = @as(f64, @floatFromInt(raw.liq_margin_ratio)) / constants.F64_1E6;
+    const threshold = liq_ratio + liq_fee_ratio;
     if (is_long) {
-        const denom = 1.0 - liq_ratio;
+        const denom = 1.0 - threshold;
         if (denom <= 0.0) return null;
         return @max(0.0, (entry - margin / size) / denom);
     }
-    return (entry + margin / size) / (1.0 + liq_ratio);
+    return (entry + margin / size) / (1.0 + threshold);
 }
 
 /// PnL as a percentage of the position's initial margin. `pnl`, `funding`, and
