@@ -82,6 +82,7 @@ test "PerpEventWatcher.connect / pollNext have the intended signatures" {
 
     const poll_info = @typeInfo(@TypeOf(watcher.PerpEventWatcher.pollNext)).@"fn";
     try std.testing.expectEqual(@as(usize, 2), poll_info.params.len);
+    try std.testing.expect(poll_info.params[0].type.? == *watcher.PerpEventWatcher);
     try std.testing.expect(poll_info.params[1].type.? == std.mem.Allocator);
     try std.testing.expect(@typeInfo(poll_info.return_type.?).error_union.payload == []event_decode.DecodedEvent);
 }
