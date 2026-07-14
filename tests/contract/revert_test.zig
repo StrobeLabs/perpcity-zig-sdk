@@ -66,6 +66,14 @@ test "decode extracts an Error(string) reason without allocating" {
         .reason => |s| try std.testing.expectEqualStrings("boom", s),
         else => return error.TestUnexpectedResult,
     }
+
+    // A non-canonical offset (not 0x20) must not decode to a bogus reason; it
+    // falls through to unknown_selector rather than reading a wrong length.
+    data.items[35] = 0x40; // offset = 64 instead of 32
+    switch (revert.decode(data.items)) {
+        .unknown_selector => {},
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "decode reads a Panic(uint256) code" {

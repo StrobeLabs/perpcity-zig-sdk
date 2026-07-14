@@ -183,6 +183,9 @@ pub fn fromHex(dest: []u8, hex: []const u8) !Revert {
 /// on any malformed / out-of-bounds layout. The returned slice borrows `data`.
 fn decodeErrorString(data: []const u8) ?[]const u8 {
     if (data.len < 68) return null; // 4 + 32 (offset) + 32 (length)
+    // The canonical encoding puts the string data at offset 0x20; reject any
+    // non-canonical offset rather than reading a length from the wrong word.
+    if (std.mem.readInt(u256, data[4..36], .big) != 32) return null;
     const len_word = std.mem.readInt(u256, data[36..68], .big);
     if (len_word > data.len - 68) return null;
     const len: usize = @intCast(len_word);
