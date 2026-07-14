@@ -36,6 +36,22 @@ fn setReturn(mock: *MockChainClient, selector: [4]u8, values: []const AbiValue) 
     try mock.setResponse(selector, bytes);
 }
 
+/// Register `return_values` for the exact call `selector(args)`, so the mock can
+/// answer the same function differently per argument set.
+fn setReturnCalldata(
+    mock: *MockChainClient,
+    selector: [4]u8,
+    args: []const AbiValue,
+    return_values: []const AbiValue,
+) !void {
+    const alloc = std.testing.allocator;
+    const calldata = try eth.abi_encode.encodeFunctionCall(alloc, selector, args);
+    defer alloc.free(calldata);
+    const bytes = try eth.abi_encode.encodeValues(alloc, return_values);
+    defer alloc.free(bytes);
+    try mock.setResponseCalldata(calldata, bytes);
+}
+
 fn expectApprox(expected: f64, actual: f64) !void {
     try std.testing.expect(@abs(expected - actual) < 1e-6);
 }
@@ -201,6 +217,30 @@ test "getPositionBalance decodes the ERC721 position count for an owner" {
 
     const n = try ctx.getPositionBalance(addr(0xBE), addr(0xA1));
     try std.testing.expectEqual(@as(u256, 3), n);
+}
+
+test "getPositionOwner returns distinct owners per pos_id via calldata-keyed responses" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+
+    // Same ownerOf(uint256) selector, different args -> different owners. The
+    // calldata table lets the mock distinguish the two calls.
+    const owner_a = addr(0xA1);
+    const owner_b = addr(0xB2);
+    try setReturnCalldata(&mock, perp_abi.owner_of_selector, &.{.{ .uint256 = 1 }}, &.{.{ .address = owner_a }});
+    try setReturnCalldata(&mock, perp_abi.owner_of_selector, &.{.{ .uint256 = 2 }}, &.{.{ .address = owner_b }});
+
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    const got_a = try ctx.getPositionOwner(addr(0xBE), 1);
+    const got_b = try ctx.getPositionOwner(addr(0xBE), 2);
+    try std.testing.expectEqualSlices(u8, &owner_a, &got_a);
+    try std.testing.expectEqualSlices(u8, &owner_b, &got_b);
+
+    // An unregistered id falls through to a revert (no selector fallback set).
+    try std.testing.expectError(error.NoMockResponse, ctx.getPositionOwner(addr(0xBE), 3));
 }
 
 // ---------------------------------------------------------------------------
