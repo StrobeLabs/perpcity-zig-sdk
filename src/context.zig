@@ -8,6 +8,7 @@ const state_cache_mod = @import("state_cache.zig");
 const chain_client = @import("chain_client.zig");
 const event_decode = @import("event_decode.zig");
 const revert_mod = @import("revert.zig");
+const multicall_mod = @import("multicall.zig");
 const perp_abi = @import("abi/perp_abi.zig");
 const fees_abi = @import("abi/fees_abi.zig");
 const margin_ratios_abi = @import("abi/margin_ratios_abi.zig");
@@ -692,6 +693,25 @@ pub const PerpCityContext = struct {
             .ok => |b| .{ .ok = b },
             .reverted => |b| .{ .reverted = .{ .data = b, .decoded = revert_mod.decode(b) } },
         };
+    }
+
+    /// Execute an on-chain Multicall3 `aggregate3`: bundle `calls` into a single
+    /// `eth_call` that runs atomically at one block. Returns one `Result` per
+    /// call (index-aligned; `success` + `return_data`).
+    ///
+    /// Unlike `getPerpData`'s JSON-RPC batching (independent calls the node may
+    /// serve from different blocks), every read here observes the SAME block
+    /// state - use it to snapshot many positions/fields consistently (e.g. a
+    /// solvency sweep). Set `allow_failure` per call to tolerate an individual
+    /// revert instead of reverting the whole aggregate.
+    ///
+    /// Ownership: free the returned slice with `multicall.freeResults`.
+    pub fn multicall3(self: *Self, calls: []const multicall_mod.Call3) ![]multicall_mod.Result {
+        const calldata = try multicall_mod.encodeAggregate3(self.allocator, calls);
+        defer self.allocator.free(calldata);
+        const raw = try self.client.call(self.allocator, multicall_mod.MULTICALL3_ADDRESS, calldata);
+        defer self.allocator.free(raw);
+        return multicall_mod.decodeResults(self.allocator, raw);
     }
 
     // -----------------------------------------------------------------
