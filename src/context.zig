@@ -574,6 +574,81 @@ pub const PerpCityContext = struct {
         return decoded.toOwnedSlice(self.allocator);
     }
 
+    /// Discover the position ids currently owned by `owner` in market `perp`.
+    ///
+    /// The Perp mints positions as Solady ERC721 tokens and is NOT
+    /// `ERC721Enumerable`, so there is no on-chain way to list a wallet's
+    /// positions. This scans `perp`'s position events over the inclusive block
+    /// range `[from_block, to_block]` for every id that appears (opens, adjusts,
+    /// closes, backstops, conversions), then confirms each in a single batched
+    /// `ownerOf` call. An id is returned iff its token is still live (ownerOf did
+    /// not revert) AND currently owned by `owner`; closed/liquidated positions
+    /// (ownerOf reverts) and positions transferred away are naturally excluded,
+    /// so the event lifecycle semantics never need to be modelled here.
+    ///
+    /// Ownership: the caller owns the returned slice and frees it with
+    /// `allocator.free`. The ids are returned in first-seen event order. For a
+    /// large block span, chunk the range as described on `pollEvents` and union
+    /// the results.
+    pub fn discoverOwnedPositions(
+        self: *Self,
+        perp: types.Address,
+        owner: types.Address,
+        from_block: u64,
+        to_block: u64,
+    ) ![]u256 {
+        const evs = try self.pollEvents(perp, from_block, to_block);
+        defer self.allocator.free(evs);
+
+        // Collect unique candidate ids in first-seen order.
+        var seen = std.AutoHashMap(u256, void).init(self.allocator);
+        defer seen.deinit();
+        var candidates: std.ArrayList(u256) = .empty;
+        defer candidates.deinit(self.allocator);
+        for (evs) |ev| {
+            const id = event_decode.positionId(ev) orelse continue;
+            const gop = try seen.getOrPut(id);
+            if (!gop.found_existing) try candidates.append(self.allocator, id);
+        }
+        if (candidates.items.len == 0) return self.allocator.alloc(u256, 0);
+
+        // Batch ownerOf(id) for every candidate into one round-trip. Each call's
+        // encoded calldata is owned here and freed after the batch resolves. A
+        // single cleanup frees exactly the entries built so far (whether the
+        // encode loop completed or errored partway), so there is no double-free
+        // and no read of an uninitialized `calls` entry.
+        const calls = try self.allocator.alloc(ChainClient.BatchCall, candidates.items.len);
+        var built: usize = 0;
+        defer {
+            for (calls[0..built]) |c| self.allocator.free(c.data);
+            self.allocator.free(calls);
+        }
+        for (candidates.items, 0..) |id, i| {
+            const cd = try eth.abi_encode.encodeFunctionCall(
+                self.allocator,
+                perp_abi.owner_of_selector,
+                &.{.{ .uint256 = id }},
+            );
+            calls[i] = .{ .to = perp, .data = cd };
+            built = i + 1;
+        }
+
+        const results = try self.client.callBatch(self.allocator, calls);
+        defer chain_client.freeBatchResults(results, self.allocator);
+
+        var owned: std.ArrayList(u256) = .empty;
+        defer owned.deinit(self.allocator);
+        for (results, candidates.items) |r, id| {
+            // A reverted ownerOf (success=false) means the position is closed or
+            // never existed; skip it rather than decoding zero bytes.
+            if (!r.success) continue;
+            const vals = eth.abi_decode.decodeValues(r.bytes, &.{.address}, self.allocator) catch continue;
+            defer chain_client.freeReturnValues(vals, self.allocator);
+            if (std.mem.eql(u8, &vals[0].address, &owner)) try owned.append(self.allocator, id);
+        }
+        return owned.toOwnedSlice(self.allocator);
+    }
+
     // -----------------------------------------------------------------
     // Private chain-reading helpers
     // -----------------------------------------------------------------
