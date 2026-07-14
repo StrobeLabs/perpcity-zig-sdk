@@ -26,6 +26,11 @@ pub const MockChainClient = struct {
     mock_addr: [20]u8 = [_]u8{0xAB} ** 20,
     /// Hash returned by every `sendTransaction`.
     next_hash: [32]u8 = [_]u8{0xCD} ** 32,
+    /// Canned receipt returned by `getReceipt`. Null (the default) makes
+    /// `getReceipt` return null, matching an unmined transaction. Set via
+    /// `setReceipt`; the mock owns and frees it (and any receipt it replaces)
+    /// so tests built through `makeOpenReceipt` stay leak-clean.
+    receipt: ?eth.receipt.TransactionReceipt = null,
 
     pub const MockError = error{NoMockResponse};
 
@@ -48,6 +53,24 @@ pub const MockChainClient = struct {
             self.allocator.free(tx.data);
         }
         self.sent.deinit(self.allocator);
+
+        if (self.receipt) |r| freeReceipt(self.allocator, r);
+    }
+
+    /// Supply the canned receipt returned by `getReceipt`. The mock takes
+    /// ownership of the receipt's allocated slices (logs/topics/data, e.g. one
+    /// built with `makeOpenReceipt`) and frees them on `deinit`. Replacing a
+    /// previously set receipt frees the old one first.
+    pub fn setReceipt(self: *MockChainClient, receipt: eth.receipt.TransactionReceipt) void {
+        if (self.receipt) |old| freeReceipt(self.allocator, old);
+        self.receipt = receipt;
+    }
+
+    /// Convenience accessor for the most recently recorded `sendTransaction`.
+    /// Returns null when nothing has been sent.
+    pub fn lastSent(self: *MockChainClient) ?SentTx {
+        if (self.sent.items.len == 0) return null;
+        return self.sent.items[self.sent.items.len - 1];
     }
 
     /// Register the raw ABI return bytes for a selector. The bytes are duped
@@ -143,14 +166,14 @@ pub const MockChainClient = struct {
     }
 
     fn mockGetReceipt(ptr: *anyopaque, allocator: std.mem.Allocator, tx_hash: [32]u8, max_attempts: u32) anyerror!?eth.receipt.TransactionReceipt {
-        // Write-path receipt scanning is out of scope for the read-path unit
-        // tests; a null receipt keeps the interface honest without requiring
-        // fabricated logs.
-        _ = ptr;
+        // Returns the canned receipt (or null if none was set). The receipt is
+        // a value with slices into mock-owned memory, so returning it by value
+        // is safe as long as the mock outlives the caller.
         _ = allocator;
         _ = tx_hash;
         _ = max_attempts;
-        return null;
+        const self: *MockChainClient = @ptrCast(@alignCast(ptr));
+        return self.receipt;
     }
 
     fn mockAddress(ptr: *anyopaque) anyerror![20]u8 {
@@ -158,3 +181,69 @@ pub const MockChainClient = struct {
         return self.mock_addr;
     }
 };
+
+/// Build a canned success receipt (`status == 1`) carrying a single log emitted
+/// by `emitter`, with `topic0` as its only topic and the 32-byte big-endian
+/// `position_id` as its data. This is what the open/create wrappers scan to
+/// decode a position or perp id. The receipt's slices are allocated with
+/// `allocator`; free them with `freeReceipt` (or hand the receipt to
+/// `MockChainClient.setReceipt`, which frees it on `deinit`).
+pub fn makeOpenReceipt(
+    allocator: std.mem.Allocator,
+    emitter: [20]u8,
+    topic0: [32]u8,
+    position_id: u256,
+) !eth.receipt.TransactionReceipt {
+    const topics = try allocator.alloc([32]u8, 1);
+    errdefer allocator.free(topics);
+    topics[0] = topic0;
+
+    const data = try allocator.alloc(u8, 32);
+    errdefer allocator.free(data);
+    var v = position_id;
+    var i: usize = 32;
+    while (i > 0) {
+        i -= 1;
+        data[i] = @truncate(v & 0xff);
+        v >>= 8;
+    }
+
+    const logs = try allocator.alloc(eth.receipt.Log, 1);
+    errdefer allocator.free(logs);
+    logs[0] = .{
+        .address = emitter,
+        .topics = topics,
+        .data = data,
+        .block_number = 1,
+        .transaction_hash = null,
+        .transaction_index = null,
+        .log_index = null,
+        .block_hash = null,
+        .removed = false,
+    };
+
+    return .{
+        .transaction_hash = [_]u8{0xCD} ** 32,
+        .block_hash = [_]u8{0} ** 32,
+        .block_number = 1,
+        .transaction_index = 0,
+        .from = [_]u8{0} ** 20,
+        .to = null,
+        .gas_used = 0,
+        .cumulative_gas_used = 0,
+        .effective_gas_price = 0,
+        .status = 1,
+        .logs = logs,
+        .contract_address = null,
+        .type_ = 2,
+    };
+}
+
+/// Free the slices owned by a receipt built with `makeOpenReceipt`.
+pub fn freeReceipt(allocator: std.mem.Allocator, receipt: eth.receipt.TransactionReceipt) void {
+    for (receipt.logs) |log| {
+        allocator.free(log.topics);
+        allocator.free(log.data);
+    }
+    allocator.free(receipt.logs);
+}
