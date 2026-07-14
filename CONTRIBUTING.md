@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- [Zig 0.15.2](https://ziglang.org/download/)
+- [Zig 0.16.0](https://ziglang.org/download/)
 - [Anvil](https://book.getfoundry.sh/anvil/) (for integration tests)
 
 ## Getting Started
@@ -39,10 +39,11 @@
 src/
   root.zig              # Full SDK module (with eth.zig dependency)
   math_root.zig         # Pure math module (no external deps)
-  context.zig           # SDK context with RPC provider and wallet
+  chain_client.zig      # ChainClient seam (EthChainClient prod impl)
+  context.zig           # SDK context (holds a ChainClient) + read helpers
   approve.zig           # USDC approval helpers
-  perp_manager.zig      # Core contract interactions
-  open_position.zig     # Position operations
+  perp_contract.zig     # Contract write wrappers (open/adjust/liquidate/...)
+  perp_factory.zig      # Market creation (createPerp / isPerp)
   types.zig             # Shared type definitions
   constants.zig         # Protocol constants
   conversions.zig       # Tick/price conversions

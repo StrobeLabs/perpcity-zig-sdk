@@ -46,50 +46,53 @@ const sdk_dep = b.dependency("perpcity_sdk", .{ .target = target, .optimize = op
 exe.root_module.addImport("perpcity_sdk", sdk_dep.module("perpcity_sdk"));
 ```
 
-Requires **Zig 0.15.2**.
+Requires **Zig 0.16.0**.
 
 ## Quick Start
 
 ```zig
 const sdk = @import("perpcity_sdk");
 
-// Initialize context
-var ctx = sdk.context.PerpCityContext.init(
+// Build a context -- it owns the RPC transport and wallet on the heap, so the
+// value is safe to move around (no pointer fixups needed).
+var ctx = try sdk.context.PerpCityContext.init(
     allocator,
-    "https://your-rpc-url.com",
-    private_key,
-    deployments,
+    "https://arb1.arbitrum.io/rpc",
+    private_key, // [32]u8
+    deployments, // sdk.types.PerpCityDeployments
 );
-ctx.fixPointers();
 defer ctx.deinit();
 
-// Approve USDC once at startup (max allowance)
-try ctx.setupForTrading();
+// Approve USDC once for this market (max allowance).
+try ctx.setupForTrading(perp);
 
-// Open a 10x long taker position
-const position = try sdk.perp_manager.openTakerPosition(&ctx, perp_id, .{
+// Size a 10x long from margin + price, then open the taker position.
+const perp_delta = try sdk.sizing.derivePerpDelta(1000.0, 10.0, mark_price, true);
+const position = try sdk.perp_contract.openTaker(&ctx, perp, .{
     .margin = 1000.0,
-    .leverage = 10.0,
-    .is_long = true,
-    .unspecified_amount_limit = 0,
+    .perp_delta = perp_delta, // signed: positive = long, negative = short
+    .amt1_limit = 0, // USD-side slippage limit
 });
 ```
 
 ## Architecture
 
-```
+```text
 Pure math layer (no dependencies):
-  types, constants, conversions, liquidity, position, perp
+  types, constants, conversions, sizing, funding, liquidity, position, perp
 
 HFT infrastructure (no dependencies):
   nonce, gas, tx_pipeline, state_cache, multi_rpc, connection,
   latency, events, position_manager
 
 Contract interaction (requires eth.zig):
-  context, approve, perp_manager, open_position
+  chain_client (ChainClient seam + EthChainClient), context,
+  perp_contract, perp_factory, approve
 
 ABI definitions:
-  perp_manager_abi, erc20_abi, fees_abi, margin_ratios_abi, beacon_abi
+  perp_abi, perp_factory_abi, module_registry_abi, protocol_fee_manager_abi,
+  fees_abi, margin_ratios_abi, funding_abi, pricing_abi, price_impact_abi,
+  beacon_abi, erc20_abi
 ```
 
 The pure math and HFT infrastructure layers have zero external dependencies and can be used standalone for off-chain calculations (mark price conversions, PnL estimation, liquidation checks) and trading infrastructure (nonce management, gas caching, latency tracking).
