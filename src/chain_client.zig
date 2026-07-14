@@ -379,6 +379,9 @@ pub const EthChainClient = struct {
         const wallet = try allocator.create(eth.wallet.Wallet);
         errdefer allocator.destroy(wallet);
         wallet.* = eth.wallet.Wallet.initLocal(allocator, private_key, provider);
+        // Fallible URL/fallback allocation follows, so tear the wallet down (not
+        // just free its memory) on rollback, mirroring the normal destroy path.
+        errdefer wallet.deinit();
 
         // Own copies of the endpoint URLs (the fallback provider borrows them).
         const owned = try allocator.alloc([]const u8, rpc_urls.len);
