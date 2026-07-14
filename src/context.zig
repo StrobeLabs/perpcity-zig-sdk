@@ -161,10 +161,67 @@ pub const PerpCityContext = struct {
     pub fn getPerpData(self: *Self, perp: types.Address) !types.PerpData {
         const config_val = try self.getPerpConfig(perp);
 
-        const fee_summary = try self.fetchFees(config_val.modules.fees);
-        const taker_bounds = try self.fetchTakerBounds(config_val.modules.margin_ratios);
-        const maker_bounds = try self.fetchMakerBounds(config_val.modules.margin_ratios);
-        const mark = try self.fetchMarkPrice(perp);
+        const fees_module = config_val.modules.fees;
+        const mr_module = config_val.modules.margin_ratios;
+
+        // Collapse the five per-field reads into a single batched eth_call
+        // (one JSON-RPC round-trip) instead of issuing them sequentially. The
+        // modules() read above is served from the config cache.
+        const cd_fees = try eth.abi_encode.encodeFunctionCall(self.allocator, fees_abi.fees_selector, &.{});
+        defer self.allocator.free(cd_fees);
+        const cd_liq = try eth.abi_encode.encodeFunctionCall(self.allocator, fees_abi.liq_fee_selector, &.{});
+        defer self.allocator.free(cd_liq);
+        const cd_taker = try eth.abi_encode.encodeFunctionCall(self.allocator, margin_ratios_abi.taker_margin_ratios_selector, &.{});
+        defer self.allocator.free(cd_taker);
+        const cd_maker = try eth.abi_encode.encodeFunctionCall(self.allocator, margin_ratios_abi.maker_margin_ratios_selector, &.{});
+        defer self.allocator.free(cd_maker);
+        const cd_pool = try eth.abi_encode.encodeFunctionCall(self.allocator, perp_abi.pool_state_selector, &.{});
+        defer self.allocator.free(cd_pool);
+
+        const calls = [_]ChainClient.BatchCall{
+            .{ .to = fees_module, .data = cd_fees },
+            .{ .to = fees_module, .data = cd_liq },
+            .{ .to = mr_module, .data = cd_taker },
+            .{ .to = mr_module, .data = cd_maker },
+            .{ .to = perp, .data = cd_pool },
+        };
+
+        const results = try self.client.callBatch(self.allocator, &calls);
+        defer chain_client.freeBatchResults(results, self.allocator);
+
+        // A failed entry means the read reverted on-chain; surface it rather
+        // than decoding zero bytes into misleading zeros.
+        for (results) |r| {
+            if (!r.success) return error.BatchCallFailed;
+        }
+
+        // fees(): (creator, insurance, lp) scaled by 1e6.
+        const fees_vals = try self.decodeBatch(results[0].bytes, &.{ .uint256, .uint256, .uint256 });
+        defer chain_client.freeReturnValues(fees_vals, self.allocator);
+        // liqFee(): single uint256.
+        const liq_vals = try self.decodeBatch(results[1].bytes, &.{.uint256});
+        defer chain_client.freeReturnValues(liq_vals, self.allocator);
+        // takerMarginRatios() / makerMarginRatios(): (init, liq, backstop) scaled by 1e6.
+        const taker_vals = try self.decodeBatch(results[2].bytes, &.{ .uint256, .uint256, .uint256 });
+        defer chain_client.freeReturnValues(taker_vals, self.allocator);
+        const maker_vals = try self.decodeBatch(results[3].bytes, &.{ .uint256, .uint256, .uint256 });
+        defer chain_client.freeReturnValues(maker_vals, self.allocator);
+        // poolState(): (int256, uint256 sqrtPriceX96, uint256, uint256).
+        const pool_vals = try self.decodeBatch(results[4].bytes, &.{ .int256, .uint256, .uint256, .uint256 });
+        defer chain_client.freeReturnValues(pool_vals, self.allocator);
+
+        const fee_summary = types.Fees{
+            .creator_fee = uintToRatio(fees_vals[0].uint256),
+            .insurance_fee = uintToRatio(fees_vals[1].uint256),
+            .lp_fee = uintToRatio(fees_vals[2].uint256),
+            .liquidation_fee = uintToRatio(liq_vals[0].uint256),
+        };
+        const taker_bounds = boundsFromRatios(taker_vals[0].uint256, taker_vals[1].uint256, taker_vals[2].uint256);
+        const maker_bounds = boundsFromRatios(maker_vals[0].uint256, maker_vals[1].uint256, maker_vals[2].uint256);
+
+        const sqrt_price_x96: u256 = pool_vals[1].uint256;
+        const mark = try conversions.sqrtPriceX96ToPrice(sqrt_price_x96);
+        self.state_cache.putMarkPrice(perp, mark, now()) catch {};
 
         return types.PerpData{
             .perp = perp,
@@ -174,6 +231,13 @@ pub const PerpCityContext = struct {
             .maker_bounds = maker_bounds,
             .fees = fee_summary,
         };
+    }
+
+    /// Decode raw ABI return bytes (from a `BatchResult`) into values with the
+    /// context allocator. Mirrors the decode step of `readContract`, minus the
+    /// encode + eth_call (the batch already performed the call).
+    fn decodeBatch(self: *Self, bytes: []const u8, out_types: []const eth.abi_types.AbiType) ![]eth.abi_encode.AbiValue {
+        return eth.abi_decode.decodeValues(bytes, out_types, self.allocator);
     }
 
     pub fn getUserData(
@@ -444,71 +508,6 @@ pub const PerpCityContext = struct {
         };
     }
 
-    fn fetchFees(self: *Self, fees_addr: types.Address) !types.Fees {
-        const fees_res = try chain_client.readContract(
-            &self.client,
-            self.allocator,
-            fees_addr,
-            fees_abi.fees_selector,
-            &.{},
-            &.{ .uint256, .uint256, .uint256 },
-        );
-        defer chain_client.freeReturnValues(fees_res, self.allocator);
-
-        const liq_res = try chain_client.readContract(
-            &self.client,
-            self.allocator,
-            fees_addr,
-            fees_abi.liq_fee_selector,
-            &.{},
-            &.{.uint256},
-        );
-        defer chain_client.freeReturnValues(liq_res, self.allocator);
-
-        const creator: u256 = fees_res[0].uint256;
-        const insurance: u256 = fees_res[1].uint256;
-        const lp: u256 = fees_res[2].uint256;
-        const liq: u256 = liq_res[0].uint256;
-
-        return types.Fees{
-            .creator_fee = uintToRatio(creator),
-            .insurance_fee = uintToRatio(insurance),
-            .lp_fee = uintToRatio(lp),
-            .liquidation_fee = uintToRatio(liq),
-        };
-    }
-
-    fn fetchTakerBounds(self: *Self, mr_addr: types.Address) !types.Bounds {
-        return self.fetchBoundsHelper(mr_addr, margin_ratios_abi.taker_margin_ratios_selector);
-    }
-
-    fn fetchMakerBounds(self: *Self, mr_addr: types.Address) !types.Bounds {
-        return self.fetchBoundsHelper(mr_addr, margin_ratios_abi.maker_margin_ratios_selector);
-    }
-
-    fn fetchBoundsHelper(self: *Self, mr_addr: types.Address, selector: [4]u8) !types.Bounds {
-        const result = try chain_client.readContract(
-            &self.client,
-            self.allocator,
-            mr_addr,
-            selector,
-            &.{},
-            &.{ .uint256, .uint256, .uint256 },
-        );
-        defer chain_client.freeReturnValues(result, self.allocator);
-
-        const init_ratio: u256 = result[0].uint256;
-        const liq_ratio: u256 = result[1].uint256;
-        const backstop_ratio: u256 = result[2].uint256;
-
-        return types.Bounds{
-            .init_margin_ratio = uintToRatio(init_ratio),
-            .liq_margin_ratio = uintToRatio(liq_ratio),
-            .backstop_margin_ratio = uintToRatio(backstop_ratio),
-            .max_leverage = if (init_ratio == 0) 0.0 else (constants.F64_1E6 / @as(f64, @floatFromInt(@as(u64, @intCast(init_ratio))))),
-        };
-    }
-
     fn fetchMarkPrice(self: *Self, perp: types.Address) !f64 {
         const result = try chain_client.readContract(
             &self.client,
@@ -563,4 +562,15 @@ pub const PerpPositionId = struct {
 fn uintToRatio(value: u256) f64 {
     const v128: u128 = @intCast(value);
     return @as(f64, @floatFromInt(v128)) / constants.F64_1E6;
+}
+
+/// Build a `Bounds` from the three 1e6-scaled margin ratios returned by
+/// IMarginRatios (taker or maker), deriving `max_leverage` from the init ratio.
+fn boundsFromRatios(init_ratio: u256, liq_ratio: u256, backstop_ratio: u256) types.Bounds {
+    return types.Bounds{
+        .init_margin_ratio = uintToRatio(init_ratio),
+        .liq_margin_ratio = uintToRatio(liq_ratio),
+        .backstop_margin_ratio = uintToRatio(backstop_ratio),
+        .max_leverage = if (init_ratio == 0) 0.0 else (constants.F64_1E6 / @as(f64, @floatFromInt(@as(u64, @intCast(init_ratio))))),
+    };
 }
