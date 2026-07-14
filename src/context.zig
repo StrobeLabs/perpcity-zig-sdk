@@ -629,16 +629,7 @@ pub const PerpCityContext = struct {
         const logs = try self.client.getLogs(self.allocator, filter);
         defer chain_client.freeLogs(logs, self.allocator);
 
-        var decoded: std.ArrayList(event_decode.DecodedEvent) = .empty;
-        defer decoded.deinit(self.allocator);
-
-        for (logs) |log| {
-            if (try event_decode.decodeEvent(self.allocator, log)) |ev| {
-                try decoded.append(self.allocator, ev);
-            }
-        }
-
-        return decoded.toOwnedSlice(self.allocator);
+        return event_decode.decodeLogs(self.allocator, logs);
     }
 
     /// Discover the position ids currently owned by `owner` in market `perp`.
