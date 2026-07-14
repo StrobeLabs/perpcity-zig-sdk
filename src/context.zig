@@ -613,14 +613,16 @@ pub const PerpCityContext = struct {
         if (candidates.items.len == 0) return self.allocator.alloc(u256, 0);
 
         // Batch ownerOf(id) for every candidate into one round-trip. Each call's
-        // encoded calldata is owned here and freed after the batch resolves.
+        // encoded calldata is owned here and freed after the batch resolves. A
+        // single cleanup frees exactly the entries built so far (whether the
+        // encode loop completed or errored partway), so there is no double-free
+        // and no read of an uninitialized `calls` entry.
         const calls = try self.allocator.alloc(ChainClient.BatchCall, candidates.items.len);
+        var built: usize = 0;
         defer {
-            for (calls) |c| self.allocator.free(c.data);
+            for (calls[0..built]) |c| self.allocator.free(c.data);
             self.allocator.free(calls);
         }
-        var built: usize = 0;
-        errdefer for (calls[0..built]) |c| self.allocator.free(c.data);
         for (candidates.items, 0..) |id, i| {
             const cd = try eth.abi_encode.encodeFunctionCall(
                 self.allocator,
