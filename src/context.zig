@@ -409,6 +409,44 @@ pub const PerpCityContext = struct {
         };
     }
 
+    /// Owner of position NFT `pos_id` (ERC721 `Perp.ownerOf(id)`).
+    ///
+    /// Positions are ERC721 tokens; a live position resolves to its owner's
+    /// address. `ownerOf` reverts for an id that was never minted or has been
+    /// burned (a closed or liquidated position), which surfaces here as an
+    /// error from the underlying call - a successful return therefore means the
+    /// position is still open. Pair with `pollEvents` to enumerate candidate
+    /// ids (the Perp is not ERC721Enumerable, so there is no on-chain listing).
+    pub fn getPositionOwner(self: *Self, perp: types.Address, pos_id: u256) !types.Address {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.owner_of_selector,
+            &.{.{ .uint256 = pos_id }},
+            &.{.address},
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+        return result[0].address;
+    }
+
+    /// Number of open positions held by `owner` (ERC721 `Perp.balanceOf(owner)`).
+    ///
+    /// Returns the count only; the Perp is not ERC721Enumerable, so the
+    /// individual position ids must be discovered via events (`pollEvents`).
+    pub fn getPositionBalance(self: *Self, perp: types.Address, owner: types.Address) !u256 {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.balance_of_selector,
+            &.{.{ .address = owner }},
+            &.{.uint256},
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+        return result[0].uint256;
+    }
+
     /// Market solvency state from `Perp.solvencyState`: (uint128 badDebt,
     /// uint128 totalMargin).
     pub fn getSolvencyState(self: *Self, perp: types.Address) !types.SolvencyState {
