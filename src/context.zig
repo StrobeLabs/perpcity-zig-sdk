@@ -6,6 +6,7 @@ const conversions = @import("conversions.zig");
 const approve_mod = @import("approve.zig");
 const state_cache_mod = @import("state_cache.zig");
 const chain_client = @import("chain_client.zig");
+const event_decode = @import("event_decode.zig");
 const perp_abi = @import("abi/perp_abi.zig");
 const fees_abi = @import("abi/fees_abi.zig");
 const margin_ratios_abi = @import("abi/margin_ratios_abi.zig");
@@ -478,6 +479,61 @@ pub const PerpCityContext = struct {
         );
         defer chain_client.freeReturnValues(result, self.allocator);
         return result[0].uint256;
+    }
+
+    // -----------------------------------------------------------------
+    // Event polling
+    // -----------------------------------------------------------------
+
+    /// Fetch and decode the recognized PerpCity events emitted by `perp` in the
+    /// inclusive block range `[from_block, to_block]`.
+    ///
+    /// Builds an `eth_getLogs` filter (address + hex block bounds), decodes each
+    /// returned log into its typed `DecodedEvent`, and collects the non-null
+    /// results. Logs with an unknown `topic0` are skipped. The raw logs are
+    /// freed before returning.
+    ///
+    /// Ownership: the caller owns the returned slice and frees it with
+    /// `allocator.free` (the `DecodedEvent`s themselves hold no allocations).
+    ///
+    /// This issues a single `eth_getLogs` for the whole `[from_block, to_block]`
+    /// span. Public RPC providers cap that span (commonly 2k-10k blocks) and/or
+    /// the number of returned logs, and will reject an over-wide request. For
+    /// large ranges the caller should chunk into fixed-width windows and call
+    /// `pollEvents` per window, concatenating the results.
+    pub fn pollEvents(
+        self: *Self,
+        perp: types.Address,
+        from_block: u64,
+        to_block: u64,
+    ) ![]event_decode.DecodedEvent {
+        // json_rpc.LogFilter expects hex strings. `address_hex` lives on the
+        // stack for the whole call; getLogs consumes the filter synchronously.
+        const address_hex = eth.primitives.addressToHex(&perp);
+        const from_hex = try std.fmt.allocPrint(self.allocator, "0x{x}", .{from_block});
+        defer self.allocator.free(from_hex);
+        const to_hex = try std.fmt.allocPrint(self.allocator, "0x{x}", .{to_block});
+        defer self.allocator.free(to_hex);
+
+        const filter = eth.json_rpc.LogFilter{
+            .fromBlock = from_hex,
+            .toBlock = to_hex,
+            .address = &address_hex,
+        };
+
+        const logs = try self.client.getLogs(self.allocator, filter);
+        defer chain_client.freeLogs(logs, self.allocator);
+
+        var decoded: std.ArrayList(event_decode.DecodedEvent) = .empty;
+        defer decoded.deinit(self.allocator);
+
+        for (logs) |log| {
+            if (try event_decode.decodeEvent(self.allocator, log)) |ev| {
+                try decoded.append(self.allocator, ev);
+            }
+        }
+
+        return decoded.toOwnedSlice(self.allocator);
     }
 
     // -----------------------------------------------------------------
