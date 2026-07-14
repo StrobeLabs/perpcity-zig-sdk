@@ -51,6 +51,30 @@ pub const DecodedEvent = union(EventType) {
     new_block: void,
 };
 
+/// The position id a `DecodedEvent` refers to, or `null` for market-wide events
+/// that are not tied to a single position (`perp_created`, `donated`,
+/// `open_interest_updated`, `capacity_updated`, `index_updated`, `new_block`).
+pub fn positionId(ev: DecodedEvent) ?u256 {
+    return switch (ev) {
+        .maker_opened => |e| e.pos_id,
+        .maker_adjusted => |e| e.pos_id,
+        .maker_closed => |e| e.pos_id,
+        .maker_converted => |e| e.pos_id,
+        .maker_backstopped => |e| e.pos_id,
+        .taker_opened => |e| e.pos_id,
+        .taker_adjusted => |e| e.pos_id,
+        .taker_closed => |e| e.pos_id,
+        .taker_backstopped => |e| e.pos_id,
+        .perp_created,
+        .donated,
+        .open_interest_updated,
+        .capacity_updated,
+        .index_updated,
+        .new_block,
+        => null,
+    };
+}
+
 /// Decode a single log into its typed event struct.
 ///
 /// Returns `null` when `topics[0]` matches no known event (or the log carries

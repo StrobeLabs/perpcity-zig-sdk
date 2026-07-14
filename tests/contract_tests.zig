@@ -9,4 +9,5 @@ comptime {
     _ = @import("contract/context_write_test.zig");
     _ = @import("contract/context_simulate_test.zig");
     _ = @import("contract/context_events_test.zig");
+    _ = @import("contract/context_discover_test.zig");
 }
