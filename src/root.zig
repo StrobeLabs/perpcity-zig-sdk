@@ -10,6 +10,7 @@ pub const funding = @import("funding.zig");
 pub const user = @import("user.zig");
 pub const errors = @import("errors.zig");
 pub const revert = @import("revert.zig");
+pub const multicall = @import("multicall.zig");
 
 /// Multi-layer state cache for HFT workloads.
 pub const state_cache = @import("state_cache.zig");

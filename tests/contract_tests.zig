@@ -12,4 +12,5 @@ comptime {
     _ = @import("contract/context_discover_test.zig");
     _ = @import("contract/revert_test.zig");
     _ = @import("contract/context_simulate_override_test.zig");
+    _ = @import("contract/context_multicall_test.zig");
 }
