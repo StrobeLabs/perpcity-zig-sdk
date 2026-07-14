@@ -292,6 +292,19 @@ pub fn decodeEvent(allocator: std.mem.Allocator, log: Log) !?DecodedEvent {
     };
 }
 
+/// Decode a batch of raw logs into their typed events, skipping any log whose
+/// `topic0` is unrecognized. Caller owns the returned slice (the `DecodedEvent`s
+/// hold no allocations); free with `allocator.free`. Shared by the pull-based
+/// `pollEvents` and the real-time `PerpEventWatcher`.
+pub fn decodeLogs(allocator: std.mem.Allocator, logs: []const Log) ![]DecodedEvent {
+    var decoded: std.ArrayList(DecodedEvent) = .empty;
+    defer decoded.deinit(allocator);
+    for (logs) |log| {
+        if (try decodeEvent(allocator, log)) |ev| try decoded.append(allocator, ev);
+    }
+    return decoded.toOwnedSlice(allocator);
+}
+
 /// Decode the shared `(posId, funding, longUtilFees, shortUtilFees, lpFees,
 /// liqFee, isLiquidation)` layout of `MakerClosed` / `MakerConverted`.
 fn decodeMakerCloseLike(allocator: std.mem.Allocator, data: []const u8) !events.MakerClosedEvent {

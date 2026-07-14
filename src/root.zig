@@ -37,6 +37,7 @@ pub const events = @import("events.zig");
 /// eth-dependent log decoder for the typed event structs (kept separate from
 /// `events.zig` so that module stays eth-free for `math_root`).
 pub const event_decode = @import("event_decode.zig");
+pub const watcher = @import("watcher.zig");
 
 /// Higher-level position management with stop-loss/take-profit triggers.
 pub const position_manager = @import("position_manager.zig");
