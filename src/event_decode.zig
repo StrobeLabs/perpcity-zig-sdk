@@ -51,18 +51,6 @@ pub const DecodedEvent = union(EventType) {
     new_block: void,
 };
 
-/// Zero-valued `SwapResult`, used to fill the `sr` field of the taker events
-/// whose nested tuple is intentionally left undecoded (see `decodeEvent`).
-const empty_swap_result = events.SwapResult{
-    .delta = 0,
-    .amm_price = 0,
-    .total_fee_amt = 0,
-    .lp_fee_amt = 0,
-    .protocol_fee_amt = 0,
-    .creator_fee_amt = 0,
-    .insurance_fee_amt = 0,
-};
-
 /// Decode a single log into its typed event struct.
 ///
 /// Returns `null` when `topics[0]` matches no known event (or the log carries
@@ -155,35 +143,52 @@ pub fn decodeEvent(allocator: std.mem.Allocator, log: Log) !?DecodedEvent {
             } };
         },
         .taker_opened => blk: {
-            // Only the leading `posId` is decoded; the trailing `SwapResult`
-            // tuple is left zero-valued.
-            // TODO: SwapResult fields not yet decoded.
-            const v = try decode(allocator, log.data, &.{.uint256});
+            // `SwapResult` is a fully static tuple, ABI-encoded inline after posId.
+            const v = try decode(allocator, log.data, &.{
+                .uint256, // posId
+                .int256, .uint256, .int256, .uint256, .uint256, .uint256, .uint256, // SwapResult
+            });
             defer allocator.free(v);
             break :blk .{ .taker_opened = .{
                 .pos_id = v[0].uint256,
-                .sr = empty_swap_result,
+                .sr = .{
+                    .delta = v[1].int256,
+                    .amm_price = v[2].uint256,
+                    .total_fee_amt = v[3].int256,
+                    .lp_fee_amt = v[4].uint256,
+                    .protocol_fee_amt = v[5].uint256,
+                    .creator_fee_amt = v[6].uint256,
+                    .insurance_fee_amt = v[7].uint256,
+                },
             } };
         },
         .taker_adjusted => blk: {
-            // Only the leading `posId` is decoded; `sr`, `funding`, and
-            // `util_fees` sit at/after the nested tuple and are left unset.
-            // TODO: SwapResult fields not yet decoded.
-            const v = try decode(allocator, log.data, &.{.uint256});
+            const v = try decode(allocator, log.data, &.{
+                .uint256, // posId
+                .int256, .uint256, .int256, .uint256, .uint256, .uint256, .uint256, // SwapResult
+                .int256, // funding
+                .uint256, // utilFees
+            });
             defer allocator.free(v);
             break :blk .{ .taker_adjusted = .{
                 .pos_id = v[0].uint256,
-                .sr = empty_swap_result,
-                .funding = 0,
-                .util_fees = 0,
+                .sr = .{
+                    .delta = v[1].int256,
+                    .amm_price = v[2].uint256,
+                    .total_fee_amt = v[3].int256,
+                    .lp_fee_amt = v[4].uint256,
+                    .protocol_fee_amt = v[5].uint256,
+                    .creator_fee_amt = v[6].uint256,
+                    .insurance_fee_amt = v[7].uint256,
+                },
+                .funding = v[8].int256,
+                .util_fees = v[9].uint256,
             } };
         },
         .taker_closed => blk: {
-            // `SwapResult` is a fully static tuple, so it is ABI-encoded inline;
-            // the trailing flat fields (funding/util_fees/liq_fee/isLiquidation)
-            // are only reachable past it, so it is flattened and fully decoded
-            // here (unlike taker_opened / taker_adjusted, whose flat fields all
-            // precede the tuple).
+            // `SwapResult` is a fully static tuple, ABI-encoded inline; the
+            // trailing flat fields (funding/util_fees/liq_fee/isLiquidation)
+            // follow it and are decoded together in one flattened schema.
             const v = try decode(allocator, log.data, &.{
                 .uint256, // posId
                 .int256, .uint256, .int256, .uint256, .uint256, .uint256, .uint256, // SwapResult

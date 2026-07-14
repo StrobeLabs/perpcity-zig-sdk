@@ -95,8 +95,8 @@ test "pollEvents decodes a batch of logs and skips unknown topics" {
     const oi_data = try enc(&.{ .{ .uint256 = 111_000 }, .{ .uint256 = 55_000 } });
     defer allocator.free(oi_data);
 
-    // TakerOpened: encode posId AND a full non-zero SwapResult so the assertion
-    // that `sr` stays zeroed proves the leading-field decoder never touched it.
+    // TakerOpened: posId followed by the inline SwapResult tuple; the assertions
+    // below prove every nested field is decoded from its ABI offset.
     const to_data = try enc(&.{
         .{ .uint256 = 99 },
         .{ .int256 = 111 },
@@ -161,11 +161,16 @@ test "pollEvents decodes a batch of logs and skips unknown topics" {
     try std.testing.expectEqual(@as(u128, 111_000), oi.long);
     try std.testing.expectEqual(@as(u128, 55_000), oi.short);
 
-    // [4] TakerOpened -- leading field only; SwapResult intentionally left zeroed.
+    // [4] TakerOpened -- posId plus the fully decoded inline SwapResult.
     const to = decoded[4].taker_opened;
     try std.testing.expectEqual(@as(u256, 99), to.pos_id);
-    try std.testing.expectEqual(@as(i256, 0), to.sr.delta);
-    try std.testing.expectEqual(@as(u256, 0), to.sr.amm_price);
+    try std.testing.expectEqual(@as(i256, 111), to.sr.delta);
+    try std.testing.expectEqual(@as(u256, 222), to.sr.amm_price);
+    try std.testing.expectEqual(@as(i256, 333), to.sr.total_fee_amt);
+    try std.testing.expectEqual(@as(u256, 444), to.sr.lp_fee_amt);
+    try std.testing.expectEqual(@as(u256, 555), to.sr.protocol_fee_amt);
+    try std.testing.expectEqual(@as(u256, 666), to.sr.creator_fee_amt);
+    try std.testing.expectEqual(@as(u256, 777), to.sr.insurance_fee_amt);
 }
 
 test "pollEvents returns an empty slice when the perp has no logs" {

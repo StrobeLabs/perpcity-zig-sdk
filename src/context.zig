@@ -495,6 +495,12 @@ pub const PerpCityContext = struct {
     ///
     /// Ownership: the caller owns the returned slice and frees it with
     /// `allocator.free` (the `DecodedEvent`s themselves hold no allocations).
+    ///
+    /// This issues a single `eth_getLogs` for the whole `[from_block, to_block]`
+    /// span. Public RPC providers cap that span (commonly 2k-10k blocks) and/or
+    /// the number of returned logs, and will reject an over-wide request. For
+    /// large ranges the caller should chunk into fixed-width windows and call
+    /// `pollEvents` per window, concatenating the results.
     pub fn pollEvents(
         self: *Self,
         perp: types.Address,
