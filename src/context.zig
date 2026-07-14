@@ -7,6 +7,7 @@ const approve_mod = @import("approve.zig");
 const state_cache_mod = @import("state_cache.zig");
 const chain_client = @import("chain_client.zig");
 const event_decode = @import("event_decode.zig");
+const revert_mod = @import("revert.zig");
 const perp_abi = @import("abi/perp_abi.zig");
 const fees_abi = @import("abi/fees_abi.zig");
 const margin_ratios_abi = @import("abi/margin_ratios_abi.zig");
@@ -22,6 +23,22 @@ const CACHE_TTL_SECONDS: i64 = 300;
 pub const CacheEntry = struct {
     value: types.PerpConfig,
     expires_at: i64,
+};
+
+/// The typed outcome of a raw simulation (`simulateCall`). Free with `deinit`.
+pub const SimOutcome = union(enum) {
+    /// The call succeeded; `data` is the ABI return bytes.
+    ok: []u8,
+    /// The call reverted; `data` is the raw revert payload and `decoded`
+    /// classifies it (borrowing `data`, so keep the outcome alive).
+    reverted: struct { data: []u8, decoded: revert_mod.Revert },
+
+    pub fn deinit(self: SimOutcome, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .ok => |b| allocator.free(b),
+            .reverted => |r| allocator.free(r.data),
+        }
+    }
 };
 
 /// Main client context for interacting with the PerpCity v0.1.0 protocol.
@@ -647,6 +664,34 @@ pub const PerpCityContext = struct {
             if (std.mem.eql(u8, &vals[0].address, &owner)) try owned.append(self.allocator, id);
         }
         return owned.toOwnedSlice(self.allocator);
+    }
+
+    /// Simulate a call against the chain, capturing a revert as a typed value
+    /// (rather than erroring) and optionally against overridden state.
+    ///
+    /// `from` (nullable) is the sender the call runs as - pass the trading
+    /// wallet so sender-dependent calls (e.g. `approve`) don't falsely revert
+    /// from `address(0)`. `overrides` (nullable) applies eth `StateOverrides`,
+    /// so a bot can simulate against hypothetical state - a future beacon index,
+    /// a modified margin/balance - to preview whether a liquidation would
+    /// succeed (and decode exactly why it wouldn't) before spending gas.
+    ///
+    /// On a revert the returned `.reverted.decoded` is the typed classification
+    /// (see `revert.zig`); branch on `revert.retryHint` to skip / retry-smaller.
+    ///
+    /// Ownership: free the returned outcome with `SimOutcome.deinit`.
+    pub fn simulateCall(
+        self: *Self,
+        to: types.Address,
+        calldata: []const u8,
+        from: ?types.Address,
+        overrides: ?*const eth.state_overrides.StateOverrides,
+    ) !SimOutcome {
+        const outcome = try self.client.callRaw(self.allocator, to, calldata, from, overrides);
+        return switch (outcome) {
+            .ok => |b| .{ .ok = b },
+            .reverted => |b| .{ .reverted = .{ .data = b, .decoded = revert_mod.decode(b) } },
+        };
     }
 
     // -----------------------------------------------------------------

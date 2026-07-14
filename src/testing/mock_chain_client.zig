@@ -50,6 +50,13 @@ pub const MockChainClient = struct {
     /// `setLogs`; the mock owns this deep copy and frees it on `deinit`. Null
     /// (the default) makes `getLogs` return an empty slice.
     logs: ?[]eth.receipt.Log = null,
+    /// Selector-keyed canned revert payloads for `callRaw`. A selector present
+    /// here makes `callRaw` return `.reverted` with these bytes; owned by the
+    /// mock, freed on `deinit`. Set via `setRevert`.
+    reverts: std.AutoHashMap([4]u8, []u8),
+    /// True iff the most recent `callRaw` was passed a non-null `overrides`, so
+    /// tests can assert the state-override path was taken.
+    last_callraw_had_overrides: bool = false,
 
     pub const MockError = error{NoMockResponse};
 
@@ -58,6 +65,7 @@ pub const MockChainClient = struct {
             .allocator = allocator,
             .responses = std.AutoHashMap([4]u8, []u8).init(allocator),
             .responses_by_calldata = std.StringHashMap([]u8).init(allocator),
+            .reverts = std.AutoHashMap([4]u8, []u8).init(allocator),
             .sent = .empty,
         };
     }
@@ -75,6 +83,10 @@ pub const MockChainClient = struct {
             self.allocator.free(e.value_ptr.*);
         }
         self.responses_by_calldata.deinit();
+
+        var rit = self.reverts.valueIterator();
+        while (rit.next()) |v| self.allocator.free(v.*);
+        self.reverts.deinit();
 
         for (self.sent.items) |tx| {
             self.allocator.free(tx.data);
@@ -146,6 +158,18 @@ pub const MockChainClient = struct {
         try self.responses_by_calldata.put(key_copy, val_copy);
     }
 
+    /// Register a canned revert payload for a selector: `callRaw` on calldata
+    /// with this selector returns `.reverted` carrying these bytes (e.g. a
+    /// 4-byte custom-error selector). The bytes are duped and owned by the mock;
+    /// replacing an existing entry frees the old copy.
+    pub fn setRevert(self: *MockChainClient, selector: [4]u8, raw_bytes: []const u8) !void {
+        const copy = try self.allocator.dupe(u8, raw_bytes);
+        errdefer self.allocator.free(copy);
+        const gop = try self.reverts.getOrPut(selector);
+        if (gop.found_existing) self.allocator.free(gop.value_ptr.*);
+        gop.value_ptr.* = copy;
+    }
+
     /// Convenience wrapper over `setResponse` that decodes a hex string (with
     /// or without a `0x` prefix) into bytes first.
     pub fn setResponseHex(self: *MockChainClient, selector: [4]u8, hex: []const u8) !void {
@@ -173,6 +197,7 @@ pub const MockChainClient = struct {
         .callBatch = mockCallBatch,
         .simulate = mockSimulate,
         .getLogs = mockGetLogs,
+        .callRaw = mockCallRaw,
     };
 
     fn mockCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -188,6 +213,28 @@ pub const MockChainClient = struct {
         // Return a fresh copy owned by the caller's allocator, matching the eth
         // path where the read helper frees the response.
         return allocator.dupe(u8, stored);
+    }
+
+    fn mockCallRaw(
+        ptr: *anyopaque,
+        allocator: std.mem.Allocator,
+        to: [20]u8,
+        data: []const u8,
+        from: ?[20]u8,
+        overrides: ?*const eth.state_overrides.StateOverrides,
+    ) anyerror!ChainClient.CallOutcome {
+        _ = to;
+        _ = from;
+        const self: *MockChainClient = @ptrCast(@alignCast(ptr));
+        self.last_callraw_had_overrides = overrides != null;
+        if (data.len < 4) return .{ .reverted = try allocator.alloc(u8, 0) };
+        const sel: [4]u8 = data[0..4].*;
+        // A registered revert wins, then a registered ok response (calldata-keyed
+        // first, then selector). Nothing registered => a bare revert, no data.
+        if (self.reverts.get(sel)) |rb| return .{ .reverted = try allocator.dupe(u8, rb) };
+        if (self.responses_by_calldata.get(data)) |ok| return .{ .ok = try allocator.dupe(u8, ok) };
+        if (self.responses.get(sel)) |ok| return .{ .ok = try allocator.dupe(u8, ok) };
+        return .{ .reverted = try allocator.alloc(u8, 0) };
     }
 
     fn mockCallBatch(
