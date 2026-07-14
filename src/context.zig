@@ -83,6 +83,31 @@ pub const PerpCityContext = struct {
         };
     }
 
+    /// Like `init`, but signs the write path via AWS KMS -- the private key
+    /// never leaves KMS. `region` is e.g. "us-west-2"; `key_id` is a KMS key id,
+    /// ARN, or `alias/...` (an `ECC_SECG_P256K1` key). Credentials resolve from
+    /// the environment / container role. Derives the wallet address from KMS at
+    /// construction, so this makes a network call.
+    pub fn initWithKms(
+        allocator: std.mem.Allocator,
+        rpc_url: []const u8,
+        region: []const u8,
+        key_id: []const u8,
+        deployments: types.PerpCityDeployments,
+    ) !Self {
+        const ec = try EthChainClient.createWithKms(allocator, rpc_url, region, key_id);
+        return Self{
+            .allocator = allocator,
+            .client = ec.client(),
+            .eth_client = ec,
+            .deployments = deployments,
+            .approved_perps = std.AutoHashMap(types.Address, void).init(allocator),
+            .config_cache = std.AutoHashMap(types.Address, CacheEntry).init(allocator),
+            .state_cache = state_cache_mod.StateCache.init(allocator, .{}),
+            .rpc_url = rpc_url,
+        };
+    }
+
     /// Build a context around an already-constructed `ChainClient` (for tests
     /// with an in-memory mock). The context does not own the client, so
     /// `deinit` leaves it alone (`eth_client` is null).

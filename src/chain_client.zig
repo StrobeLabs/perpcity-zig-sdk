@@ -251,6 +251,12 @@ pub const EthChainClient = struct {
     transport: *eth.http_transport.HttpTransport,
     provider: *eth.provider.Provider,
     wallet: *eth.wallet.Wallet,
+    /// The heap-owned KMS signer when this client signs via AWS KMS (see
+    /// `createWithKms`); null for the raw-key path. Kept stable because the
+    /// wallet's `Signer` holds a borrowed pointer to it.
+    kms_signer: ?*eth.signer.KmsSigner = null,
+    /// Owned copy of the KMS key id (the signer borrows it), freed on `destroy`.
+    kms_key_id: ?[]u8 = null,
 
     /// Allocate and wire the eth.zig objects on the heap. Returns the heap
     /// pointer -- keep it and hand out `ChainClient`s via `client()`.
@@ -284,11 +290,65 @@ pub const EthChainClient = struct {
         return self;
     }
 
+    /// Like `create`, but signs via AWS KMS: the private key never leaves KMS.
+    /// `region` is e.g. "us-west-2" and `key_id` is a KMS key id, ARN, or
+    /// `alias/...` (must be an `ECC_SECG_P256K1` key). Credentials are resolved
+    /// from the environment / container role at call time. The signer derives
+    /// and caches the wallet address from KMS during construction (one
+    /// `kms:GetPublicKey`), so this makes a network call.
+    pub fn createWithKms(
+        allocator: std.mem.Allocator,
+        rpc_url: []const u8,
+        region: []const u8,
+        key_id: []const u8,
+    ) !*EthChainClient {
+        const self = try allocator.create(EthChainClient);
+        errdefer allocator.destroy(self);
+
+        const transport = try allocator.create(eth.http_transport.HttpTransport);
+        errdefer allocator.destroy(transport);
+        transport.* = eth.http_transport.HttpTransport.init(allocator, rpc_url, eth.runtime.blockingIo());
+        errdefer transport.deinit();
+
+        const provider = try allocator.create(eth.provider.Provider);
+        errdefer allocator.destroy(provider);
+        provider.* = eth.provider.Provider.init(allocator, transport);
+
+        // The signer borrows key_id for its lifetime, so own a copy here.
+        const key_id_owned = try allocator.dupe(u8, key_id);
+        errdefer allocator.free(key_id_owned);
+
+        // Heap-owned + stable: the wallet's Signer holds a borrowed pointer.
+        const kms_signer = try allocator.create(eth.signer.KmsSigner);
+        errdefer allocator.destroy(kms_signer);
+        kms_signer.* = try eth.signer.KmsSigner.init(allocator, eth.runtime.blockingIo(), region, key_id_owned);
+        errdefer kms_signer.deinit();
+
+        const wallet = try allocator.create(eth.wallet.Wallet);
+        errdefer allocator.destroy(wallet);
+        wallet.* = eth.wallet.Wallet.init(allocator, eth.signer.Signer.fromKms(kms_signer), provider);
+
+        self.* = .{
+            .allocator = allocator,
+            .transport = transport,
+            .provider = provider,
+            .wallet = wallet,
+            .kms_signer = kms_signer,
+            .kms_key_id = key_id_owned,
+        };
+        return self;
+    }
+
     /// Tear down the wallet/transport and free every heap allocation, including
-    /// `self`.
+    /// `self` and (when signing via KMS) the KMS signer.
     pub fn destroy(self: *EthChainClient) void {
         self.wallet.deinit();
         self.transport.deinit();
+        if (self.kms_signer) |ks| {
+            ks.deinit();
+            self.allocator.destroy(ks);
+        }
+        if (self.kms_key_id) |kid| self.allocator.free(kid);
         self.allocator.destroy(self.wallet);
         self.allocator.destroy(self.provider);
         self.allocator.destroy(self.transport);
