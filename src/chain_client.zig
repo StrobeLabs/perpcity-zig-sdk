@@ -27,6 +27,15 @@ pub const ChainClient = struct {
         bytes: []u8,
     };
 
+    /// Result of a raw eth_call that captures reverts instead of erroring.
+    /// `ok` is the return data; `reverted` is the ABI revert payload (the
+    /// 4-byte selector + args, or empty for a bare revert / no data). Both
+    /// slices are caller-owned -- free with `freeCallOutcome`.
+    pub const CallOutcome = union(enum) {
+        ok: []u8,
+        reverted: []u8,
+    };
+
     pub const VTable = struct {
         /// eth_call; returns the raw ABI return bytes. Caller owns the slice
         /// (freed with the passed allocator by the read helper).
@@ -52,6 +61,14 @@ pub const ChainClient = struct {
         /// the passed allocator); the caller owns it and frees it with
         /// `freeLogs`.
         getLogs: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, filter: eth.json_rpc.LogFilter) anyerror![]eth.receipt.Log,
+        /// Raw eth_call that returns the revert payload instead of erroring, and
+        /// can simulate against modified state. `from` (nullable) is passed
+        /// through so sender-dependent calls don't falsely revert; `overrides`
+        /// (nullable) applies state overrides (e.g. a hypothetical index value
+        /// or balance). Returns `.ok` bytes on success or `.reverted` bytes (the
+        /// ABI revert payload, decode with `revert.decode`) on revert. Both
+        /// owned by the caller (free with `freeCallOutcome`).
+        callRaw: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8, from: ?[20]u8, overrides: ?*const eth.state_overrides.StateOverrides) anyerror!CallOutcome,
     };
 
     pub fn call(self: *ChainClient, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) ![]u8 {
@@ -81,7 +98,62 @@ pub const ChainClient = struct {
     pub fn getLogs(self: *ChainClient, allocator: std.mem.Allocator, filter: eth.json_rpc.LogFilter) ![]eth.receipt.Log {
         return self.vtable.getLogs(self.ptr, allocator, filter);
     }
+
+    pub fn callRaw(
+        self: *ChainClient,
+        allocator: std.mem.Allocator,
+        to: [20]u8,
+        data: []const u8,
+        from: ?[20]u8,
+        overrides: ?*const eth.state_overrides.StateOverrides,
+    ) !CallOutcome {
+        return self.vtable.callRaw(self.ptr, allocator, to, data, from, overrides);
+    }
 };
+
+/// Free the owned bytes of a `CallOutcome`.
+pub fn freeCallOutcome(outcome: ChainClient.CallOutcome, allocator: std.mem.Allocator) void {
+    switch (outcome) {
+        .ok, .reverted => |b| allocator.free(b),
+    }
+}
+
+/// Parse an `eth_call` JSON-RPC response into a `CallOutcome`. A `result` hex
+/// string becomes `.ok`; an `error.data` hex string (the ABI revert payload)
+/// becomes `.reverted`; an error object without `data` becomes `.reverted` with
+/// empty bytes. Returns `error.RpcError` when the response is neither.
+pub fn parseEthCallResponse(allocator: std.mem.Allocator, json: []const u8) !ChainClient.CallOutcome {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.RpcError;
+    const obj = parsed.value.object;
+
+    if (obj.get("result")) |res| {
+        if (res == .string) return .{ .ok = try hexToOwned(allocator, res.string) };
+    }
+    if (obj.get("error")) |err_val| {
+        if (err_val == .object) {
+            if (err_val.object.get("data")) |d| {
+                if (d == .string) return .{ .reverted = try hexToOwned(allocator, d.string) };
+            }
+        }
+        return .{ .reverted = try allocator.alloc(u8, 0) };
+    }
+    return error.RpcError;
+}
+
+/// Decode a `0x`-prefixed (or bare) hex string into freshly-allocated bytes.
+fn hexToOwned(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
+    const h = if (hex.len >= 2 and hex[0] == '0' and (hex[1] == 'x' or hex[1] == 'X'))
+        hex[2..]
+    else
+        hex;
+    if (h.len % 2 != 0) return error.InvalidHexLength;
+    const out = try allocator.alloc(u8, h.len / 2);
+    errdefer allocator.free(out);
+    _ = try eth.hex.hexToBytes(out, h);
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // Free helpers -- mirror eth.contract.contractRead/contractWrite but over the
@@ -238,6 +310,7 @@ pub const EthChainClient = struct {
         .callBatch = ethCallBatch,
         .simulate = ethSimulate,
         .getLogs = ethGetLogs,
+        .callRaw = ethCallRaw,
     };
 
     fn ethCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -282,6 +355,30 @@ pub const EthChainClient = struct {
         _ = allocator;
         const self: *EthChainClient = @ptrCast(@alignCast(ptr));
         return self.provider.getLogs(filter);
+    }
+
+    fn ethCallRaw(
+        ptr: *anyopaque,
+        allocator: std.mem.Allocator,
+        to: [20]u8,
+        data: []const u8,
+        from: ?[20]u8,
+        overrides: ?*const eth.state_overrides.StateOverrides,
+    ) anyerror!ChainClient.CallOutcome {
+        // eth.zig's Provider.call drops the JSON-RPC error.data (revert bytes)
+        // and has no from+overrides path, so build the params and go through the
+        // raw transport, then parse the response ourselves.
+        const self: *EthChainClient = @ptrCast(@alignCast(ptr));
+        const params = if (overrides) |ov|
+            try self.provider.formatCallParamsWithOverrides(to, data, from, ov)
+        else
+            try self.provider.formatCallParams(to, data, from);
+        defer self.allocator.free(params);
+
+        const resp = try self.transport.request(eth.json_rpc.Method.eth_call, params, 1);
+        defer self.allocator.free(resp);
+
+        return parseEthCallResponse(allocator, resp);
     }
 
     fn ethCallBatch(
