@@ -838,7 +838,11 @@ pub const PerpCityContext = struct {
             mw.nonce_mgr.releaseNonce(prepared.nonce);
             return e;
         };
-        try mw.pipeline.recordSubmission(hash, prepared, now_ms);
+        // The tx is already broadcast, so a tracking failure must NOT surface as
+        // a send failure -- a caller that retried with a fresh nonce would
+        // double-send a live tx. Track best-effort; the only cost of a miss is
+        // that this tx is not covered by stuck-detection. Return it regardless.
+        mw.pipeline.recordSubmission(hash, prepared, now_ms) catch {};
         return .{ .tx_hash = hash, .nonce = prepared.nonce };
     }
 
