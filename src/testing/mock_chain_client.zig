@@ -31,6 +31,10 @@ pub const MockChainClient = struct {
     /// `setReceipt`; the mock owns and frees it (and any receipt it replaces)
     /// so tests built through `makeOpenReceipt` stay leak-clean.
     receipt: ?eth.receipt.TransactionReceipt = null,
+    /// The `from` passed to the most recent `simulate`, for assertions that the
+    /// preflight ran from the caller's wallet (not address(0)). Null until the
+    /// first `simulate`.
+    last_simulate_from: ?[20]u8 = null,
 
     pub const MockError = error{NoMockResponse};
 
@@ -110,6 +114,7 @@ pub const MockChainClient = struct {
         .getReceipt = mockGetReceipt,
         .address = mockAddress,
         .callBatch = mockCallBatch,
+        .simulate = mockSimulate,
     };
 
     fn mockCall(ptr: *anyopaque, allocator: std.mem.Allocator, to: [20]u8, data: []const u8) anyerror![]u8 {
@@ -179,6 +184,19 @@ pub const MockChainClient = struct {
     fn mockAddress(ptr: *anyopaque) anyerror![20]u8 {
         const self: *MockChainClient = @ptrCast(@alignCast(ptr));
         return self.mock_addr;
+    }
+
+    fn mockSimulate(ptr: *anyopaque, to: [20]u8, data: []const u8, from: [20]u8) anyerror!void {
+        _ = to;
+        const self: *MockChainClient = @ptrCast(@alignCast(ptr));
+        // Record the caller-supplied `from` so tests can assert the preflight
+        // ran from a real wallet, not address(0).
+        self.last_simulate_from = from;
+        if (data.len < 4) return MockError.NoMockResponse;
+        const sel: [4]u8 = data[0..4].*;
+        // Same selector table as `call`: a registered response stands in for a
+        // call that would NOT revert; a missing one stands in for a revert.
+        _ = self.responses.get(sel) orelse return MockError.NoMockResponse;
     }
 };
 

@@ -109,12 +109,14 @@ pub fn createPerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !types.
 pub fn simulateCreatePerp(ctx: *PerpCityContext, params: types.CreatePerpParams) !void {
     const c = try buildCreatePerp(ctx, params);
     const args = c.abiArgs();
+    const from = try ctx.client.address();
     return chain_client.simulateContract(
         &ctx.client,
         ctx.allocator,
         c.to,
         c.selector,
         &args,
+        from,
     );
 }
 

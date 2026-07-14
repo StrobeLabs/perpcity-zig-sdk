@@ -99,12 +99,14 @@ pub fn simulateOpenTaker(
     params: types.OpenTakerPositionParams,
 ) !void {
     const c = try buildOpenTaker(ctx, perp, params);
+    const from = try ctx.client.address();
     return chain_client.simulateContract(
         &ctx.client,
         ctx.allocator,
         c.to,
         c.selector,
         &.{.{ .tuple = &c.tuple }},
+        from,
     );
 }
 
@@ -190,12 +192,14 @@ pub fn simulateOpenMaker(
     params: types.OpenMakerPositionParams,
 ) !void {
     const c = try buildOpenMaker(ctx, perp, params);
+    const from = try ctx.client.address();
     return chain_client.simulateContract(
         &ctx.client,
         ctx.allocator,
         c.to,
         c.selector,
         &.{.{ .tuple = &c.tuple }},
+        from,
     );
 }
 
@@ -248,12 +252,14 @@ pub fn simulateAdjustMaker(
     params: types.AdjustMakerParams,
 ) !void {
     const c = buildAdjustMaker(perp, params);
+    const from = try ctx.client.address();
     return chain_client.simulateContract(
         &ctx.client,
         ctx.allocator,
         c.to,
         c.selector,
         &.{.{ .tuple = &c.tuple }},
+        from,
     );
 }
 
@@ -301,12 +307,14 @@ pub fn simulateAdjustTaker(
     params: types.AdjustTakerParams,
 ) !void {
     const c = buildAdjustTaker(perp, params);
+    const from = try ctx.client.address();
     return chain_client.simulateContract(
         &ctx.client,
         ctx.allocator,
         c.to,
         c.selector,
         &.{.{ .tuple = &c.tuple }},
+        from,
     );
 }
 
@@ -351,7 +359,8 @@ pub fn simulateLiquidateMaker(
     params: types.LiquidateParams,
 ) !void {
     const c = buildLiquidate(perp, perp_abi.liquidate_maker_selector, params);
-    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args);
+    const from = try ctx.client.address();
+    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args, from);
 }
 
 pub fn liquidateTaker(
@@ -370,7 +379,8 @@ pub fn simulateLiquidateTaker(
     params: types.LiquidateParams,
 ) !void {
     const c = buildLiquidate(perp, perp_abi.liquidate_taker_selector, params);
-    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args);
+    const from = try ctx.client.address();
+    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args, from);
 }
 
 /// The `(to, selector, args)` for a backstop call. `backstopMaker` and
@@ -411,7 +421,8 @@ pub fn simulateBackstopMaker(
     params: types.BackstopParams,
 ) !void {
     const c = buildBackstop(perp, perp_abi.backstop_maker_selector, params);
-    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args);
+    const from = try ctx.client.address();
+    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args, from);
 }
 
 pub fn backstopTaker(
@@ -430,7 +441,8 @@ pub fn simulateBackstopTaker(
     params: types.BackstopParams,
 ) !void {
     const c = buildBackstop(perp, perp_abi.backstop_taker_selector, params);
-    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args);
+    const from = try ctx.client.address();
+    return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args, from);
 }
 
 // ---------------------------------------------------------------------------

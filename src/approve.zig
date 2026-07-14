@@ -87,12 +87,14 @@ pub fn simulateApproveUsdc(
     amount_scaled: u256,
 ) !void {
     const c = try buildApprove(ctx, perp, amount_scaled);
+    const from = try ctx.client.address();
     return chain_client.simulateContract(
         &ctx.client,
         ctx.allocator,
         c.to,
         c.selector,
         &c.args,
+        from,
     );
 }
 
