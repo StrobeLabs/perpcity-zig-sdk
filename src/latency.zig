@@ -5,6 +5,11 @@ const std = @import("std");
 /// with O(1) sample recording and O(n log n) stats computation.
 pub const LatencyTracker = struct {
     pub const MAX_SAMPLES: usize = 1024;
+    comptime {
+        // `recordSample` wraps the ring index with a bitmask, which is only
+        // correct when the window is a power of two.
+        std.debug.assert(std.math.isPowerOfTwo(MAX_SAMPLES));
+    }
 
     samples: [MAX_SAMPLES]u64 = [_]u64{0} ** MAX_SAMPLES,
     sample_count: usize = 0,
@@ -18,15 +23,18 @@ pub const LatencyTracker = struct {
 
     /// Record a latency sample in nanoseconds.
     pub fn recordSample(self: *LatencyTracker, latency_ns: u64) void {
+        // MAX_SAMPLES is a power of two (asserted at comptime below), so wrap the
+        // index with a mask (single AND) rather than a modulo.
         self.samples[self.sample_index] = latency_ns;
-        self.sample_index = (self.sample_index + 1) % MAX_SAMPLES;
+        self.sample_index = (self.sample_index + 1) & (MAX_SAMPLES - 1);
         if (self.sample_count < MAX_SAMPLES) {
             self.sample_count += 1;
         }
         self.total_requests += 1;
         self.total_latency_ns = self.total_latency_ns +| latency_ns; // saturating add
-        if (latency_ns < self.min_ns) self.min_ns = latency_ns;
-        if (latency_ns > self.max_ns) self.max_ns = latency_ns;
+        // Branchless min/max keep the hot path free of unpredictable branches.
+        self.min_ns = @min(self.min_ns, latency_ns);
+        self.max_ns = @max(self.max_ns, latency_ns);
     }
 
     pub const Stats = struct {
