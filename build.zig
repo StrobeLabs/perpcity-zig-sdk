@@ -19,13 +19,16 @@ pub fn build(b: *std.Build) void {
     });
     sdk_module.addImport("eth", eth_module);
 
-    // Pure math module (no eth dependency -- for unit tests)
-    // Uses math_root.zig which only exports pure-Zig modules.
+    // Math + HFT module (math_root.zig) for the fast unit-test build. It now
+    // depends on eth so the math layer can use eth.zig's optimized u256 limb
+    // arithmetic (e.g. TickMath through `uint256.divLimbsDirect`) instead of the
+    // builtin `u256` operators, which lower to slow software routines on aarch64.
     const math_module = b.createModule(.{
         .root_source_file = b.path("src/math_root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    math_module.addImport("eth", eth_module);
 
     // Unit tests -- pure math, no eth
     const unit_test_mod = b.createModule(.{
