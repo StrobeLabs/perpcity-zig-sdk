@@ -82,10 +82,14 @@ pub fn priceToTick(price: f64, round_down: bool) ConversionError!i32 {
     }
 }
 
+/// ln(1.0001), precomputed at comptime.
+const LN_1_0001: f64 = @log(@as(f64, 1.0001));
+
 /// Convert a Uniswap V4 tick to a price.
-/// price = 1.0001 ^ tick
+/// price = 1.0001 ^ tick, evaluated as exp(tick * ln(1.0001)) -- a single `exp`
+/// against a precomputed constant, far cheaper than the general `pow(1.0001, x)`.
 pub fn tickToPrice(tick: i32) f64 {
-    return std.math.pow(f64, 1.0001, @as(f64, @floatFromInt(tick)));
+    return @exp(@as(f64, @floatFromInt(tick)) * LN_1_0001);
 }
 
 /// Convert a sqrtPriceX96 value to a price.
