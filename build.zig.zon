@@ -1,6 +1,6 @@
 .{
     .name = .perpcity_zig_sdk,
-    .version = "0.4.0",
+    .version = "0.6.0",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0xfab90a2f402a7502,
     .dependencies = .{
