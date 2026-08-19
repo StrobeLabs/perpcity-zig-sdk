@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-08-19
+
+### Changed
+
+- Bumped eth.zig to v0.9.1, which adds `HttpTransport.lastFailure()` diagnostics for transport-level failures (StrobeLabs/eth.zig#115). Consumers pinning both this SDK and eth.zig directly must pin the same eth.zig version to avoid duplicate-instance link collisions.
+
 ## [0.3.0] - 2026-05-19
 
 ### Note
