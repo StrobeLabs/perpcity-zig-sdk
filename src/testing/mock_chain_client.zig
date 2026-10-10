@@ -34,9 +34,9 @@ pub const MockChainClient = struct {
     /// Records every `sendTransaction` for assertions.
     sent: std.ArrayList(SentTx),
     /// Address returned by `address()`.
-    mock_addr: [20]u8 = [_]u8{0xAB} ** 20,
+    mock_addr: [20]u8 = @splat(0xAB),
     /// Hash returned by every `sendTransaction`.
-    next_hash: [32]u8 = [_]u8{0xCD} ** 32,
+    next_hash: [32]u8 = @splat(0xCD),
     /// Canned receipt returned by `getReceipt`. Null (the default) makes
     /// `getReceipt` return null, matching an unmined transaction. Set via
     /// `setReceipt`; the mock owns and frees it (and any receipt it replaces)
@@ -377,11 +377,11 @@ pub fn makeOpenReceipt(
     };
 
     return .{
-        .transaction_hash = [_]u8{0xCD} ** 32,
-        .block_hash = [_]u8{0} ** 32,
+        .transaction_hash = @as([32]u8, @splat(0xCD)),
+        .block_hash = @as([32]u8, @splat(0)),
         .block_number = 1,
         .transaction_index = 0,
-        .from = [_]u8{0} ** 20,
+        .from = @as([20]u8, @splat(0)),
         .to = null,
         .gas_used = 0,
         .cumulative_gas_used = 0,

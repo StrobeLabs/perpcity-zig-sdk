@@ -7,7 +7,7 @@ const MockChainClient = sdk.testing.mock_chain_client.MockChainClient;
 const perp_abi = sdk.abi.perp_abi;
 
 fn addr(b: u8) types.Address {
-    return [_]u8{b} ** 20;
+    return @as([20]u8, @splat(b));
 }
 
 fn testDeployments() types.PerpCityDeployments {
@@ -43,7 +43,7 @@ test "managed write assigns pipeline nonce+gas and bump resends at the same nonc
 
     // Feed a base fee, then send: nonce 5, explicit gas, non-zero fees.
     ctx.refreshBaseFee(100 * std.math.pow(u64, 10, 9), 1000); // 100 gwei
-    mock.next_hash = [_]u8{0xA1} ** 32;
+    mock.next_hash = @as([32]u8, @splat(0xA1));
     const r1 = try ctx.sendManaged(request, 1000);
     try std.testing.expectEqual(@as(u64, 5), r1.nonce);
 
@@ -65,9 +65,9 @@ test "managed write assigns pipeline nonce+gas and bump resends at the same nonc
     try std.testing.expectEqualSlices(u8, &r1.tx_hash, &stuck[0]);
 
     // Bump-resend at 2x: same nonce, fees exactly doubled.
-    mock.next_hash = [_]u8{0xB2} ** 32;
+    mock.next_hash = @as([32]u8, @splat(0xB2));
     const h2 = try ctx.resendBumped(request, r1.tx_hash, 2);
-    try std.testing.expectEqualSlices(u8, &([_]u8{0xB2} ** 32), &h2);
+    try std.testing.expectEqualSlices(u8, &(@as([32]u8, @splat(0xB2))), &h2);
 
     const p2 = mock.last_managed.?;
     try std.testing.expectEqual(@as(u64, 5), p2.nonce); // replacement reuses the nonce

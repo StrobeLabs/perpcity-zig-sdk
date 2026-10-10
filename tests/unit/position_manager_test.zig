@@ -11,7 +11,7 @@ const TriggerAction = pm.TriggerAction;
 // ---------------------------------------------------------------------------
 
 fn makePerp(byte: u8) [20]u8 {
-    return [_]u8{byte} ** 20;
+    return @as([20]u8, @splat(byte));
 }
 
 fn makeLongPosition(id: u256, entry_price: f64, margin: f64) ManagedPosition {

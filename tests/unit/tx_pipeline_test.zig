@@ -16,7 +16,7 @@ const Urgency = sdk.gas.Urgency;
 
 fn makeRequest(gas_limit: u64, urgency: Urgency) TxRequest {
     return .{
-        .to = [_]u8{0xAA} ** 20,
+        .to = @as([20]u8, @splat(0xAA)),
         .calldata = &[_]u8{},
         .gas_limit = gas_limit,
         .urgency = urgency,
@@ -100,11 +100,11 @@ test "prepare - returns TooManyInFlight when limit reached" {
 
     // Submit 2 transactions to fill up the limit
     const p1 = try pipeline.prepare(request, 2000);
-    const hash1 = [_]u8{0x01} ** 32;
+    const hash1 = @as([32]u8, @splat(0x01));
     try pipeline.recordSubmission(hash1, p1, 2000);
 
     const p2 = try pipeline.prepare(request, 2000);
-    const hash2 = [_]u8{0x02} ** 32;
+    const hash2 = @as([32]u8, @splat(0x02));
     try pipeline.recordSubmission(hash2, p2, 2000);
 
     // Third should fail
@@ -181,7 +181,7 @@ test "recordSubmission - tracks transaction in in-flight map" {
 
     const request = makeRequest(300_000, .normal);
     const prepared = try pipeline.prepare(request, 2000);
-    const tx_hash = [_]u8{0xAB} ** 32;
+    const tx_hash = @as([32]u8, @splat(0xAB));
 
     try pipeline.recordSubmission(tx_hash, prepared, 2000);
 
@@ -207,13 +207,13 @@ test "recordSubmission - tracks multiple transactions" {
     const request = makeRequest(200_000, .normal);
 
     const p1 = try pipeline.prepare(request, 2000);
-    try pipeline.recordSubmission([_]u8{0x01} ** 32, p1, 2000);
+    try pipeline.recordSubmission(@as([32]u8, @splat(0x01)), p1, 2000);
 
     const p2 = try pipeline.prepare(request, 2000);
-    try pipeline.recordSubmission([_]u8{0x02} ** 32, p2, 2100);
+    try pipeline.recordSubmission(@as([32]u8, @splat(0x02)), p2, 2100);
 
     const p3 = try pipeline.prepare(request, 2000);
-    try pipeline.recordSubmission([_]u8{0x03} ** 32, p3, 2200);
+    try pipeline.recordSubmission(@as([32]u8, @splat(0x03)), p3, 2200);
 
     try std.testing.expectEqual(@as(usize, 3), pipeline.inFlightCount());
 }
@@ -234,7 +234,7 @@ test "confirmTx - removes from in-flight and confirms nonce" {
 
     const request = makeRequest(200_000, .normal);
     const prepared = try pipeline.prepare(request, 2000);
-    const tx_hash = [_]u8{0xAA} ** 32;
+    const tx_hash = @as([32]u8, @splat(0xAA));
 
     try pipeline.recordSubmission(tx_hash, prepared, 2000);
     try std.testing.expectEqual(@as(usize, 1), pipeline.inFlightCount());
@@ -257,7 +257,7 @@ test "confirmTx - no-op for unknown tx hash" {
     defer pipeline.deinit();
 
     // Confirming a non-existent hash should be safe
-    pipeline.confirmTx([_]u8{0xFF} ** 32);
+    pipeline.confirmTx(@as([32]u8, @splat(0xFF)));
     try std.testing.expectEqual(@as(usize, 0), pipeline.inFlightCount());
 }
 
@@ -277,7 +277,7 @@ test "failTx - removes from in-flight and releases nonce" {
 
     const request = makeRequest(200_000, .normal);
     const prepared = try pipeline.prepare(request, 2000);
-    const tx_hash = [_]u8{0xBB} ** 32;
+    const tx_hash = @as([32]u8, @splat(0xBB));
 
     try pipeline.recordSubmission(tx_hash, prepared, 2000);
     try std.testing.expectEqual(@as(usize, 1), pipeline.inFlightCount());
@@ -301,7 +301,7 @@ test "failTx - releases nonce so it can be reused" {
 
     const request = makeRequest(200_000, .normal);
     const prepared = try pipeline.prepare(request, 2000);
-    const tx_hash = [_]u8{0xCC} ** 32;
+    const tx_hash = @as([32]u8, @splat(0xCC));
 
     try pipeline.recordSubmission(tx_hash, prepared, 2000);
 
@@ -325,7 +325,7 @@ test "failTx - no-op for unknown tx hash" {
     defer pipeline.deinit();
 
     // Failing a non-existent hash should be safe
-    pipeline.failTx([_]u8{0xFF} ** 32);
+    pipeline.failTx(@as([32]u8, @splat(0xFF)));
     try std.testing.expectEqual(@as(usize, 0), pipeline.inFlightCount());
 }
 
@@ -347,7 +347,7 @@ test "getStuckTxs - returns empty when no transactions are stuck" {
 
     const request = makeRequest(200_000, .normal);
     const prepared = try pipeline.prepare(request, 2000);
-    try pipeline.recordSubmission([_]u8{0x01} ** 32, prepared, 2000);
+    try pipeline.recordSubmission(@as([32]u8, @splat(0x01)), prepared, 2000);
 
     // Check at 10_000ms -- not stuck yet (only 8s elapsed, timeout is 30s)
     const stuck = try pipeline.getStuckTxs(10_000);
@@ -372,18 +372,18 @@ test "getStuckTxs - identifies transactions past timeout" {
 
     // Submit at t=1000
     const p1 = try pipeline.prepare(request, 2000);
-    try pipeline.recordSubmission([_]u8{0x01} ** 32, p1, 1000);
+    try pipeline.recordSubmission(@as([32]u8, @splat(0x01)), p1, 1000);
 
     // Submit at t=4000
     const p2 = try pipeline.prepare(request, 4500);
-    try pipeline.recordSubmission([_]u8{0x02} ** 32, p2, 4000);
+    try pipeline.recordSubmission(@as([32]u8, @splat(0x02)), p2, 4000);
 
     // At t=6000: first tx is stuck (6000-1000=5000 >= 5000), second is not (6000-4000=2000 < 5000)
     const stuck = try pipeline.getStuckTxs(6000);
     defer std.testing.allocator.free(stuck);
 
     try std.testing.expectEqual(@as(usize, 1), stuck.len);
-    try std.testing.expectEqual([_]u8{0x01} ** 32, stuck[0]);
+    try std.testing.expectEqual(@as([32]u8, @splat(0x01)), stuck[0]);
 }
 
 test "getStuckTxs - returns empty when no in-flight transactions" {
@@ -416,7 +416,7 @@ test "getStuckTxs - exact boundary is considered stuck" {
 
     const request = makeRequest(200_000, .normal);
     const p1 = try pipeline.prepare(request, 2000);
-    try pipeline.recordSubmission([_]u8{0x01} ** 32, p1, 1000);
+    try pipeline.recordSubmission(@as([32]u8, @splat(0x01)), p1, 1000);
 
     // Exactly at boundary: 6000 - 1000 = 5000 >= 5000
     const stuck = try pipeline.getStuckTxs(6000);
@@ -441,7 +441,7 @@ test "prepareBump - returns multiplied gas fees for in-flight tx" {
 
     const request = makeRequest(500_000, .normal);
     const prepared = try pipeline.prepare(request, 2000);
-    const tx_hash = [_]u8{0xDD} ** 32;
+    const tx_hash = @as([32]u8, @splat(0xDD));
     try pipeline.recordSubmission(tx_hash, prepared, 2000);
 
     const bump = pipeline.prepareBump(tx_hash, 2).?;
@@ -465,7 +465,7 @@ test "prepareBump - returns null for unknown tx hash" {
     var pipeline = setupPipeline(std.testing.allocator, &nonce_mgr, &gas_cache, .{});
     defer pipeline.deinit();
 
-    const bump = pipeline.prepareBump([_]u8{0xFF} ** 32, 2);
+    const bump = pipeline.prepareBump(@as([32]u8, @splat(0xFF)), 2);
     try std.testing.expectEqual(@as(?BumpParams, null), bump);
 }
 
@@ -481,7 +481,7 @@ test "prepareBump - preserves original nonce" {
 
     const request = makeRequest(200_000, .normal);
     const prepared = try pipeline.prepare(request, 2000);
-    const tx_hash = [_]u8{0xEE} ** 32;
+    const tx_hash = @as([32]u8, @splat(0xEE));
     try pipeline.recordSubmission(tx_hash, prepared, 2000);
 
     const bump = pipeline.prepareBump(tx_hash, 3).?;
@@ -517,12 +517,12 @@ test "inFlightCount - increments on submission and decrements on confirm" {
     const request = makeRequest(200_000, .normal);
 
     const p1 = try pipeline.prepare(request, 2000);
-    const hash1 = [_]u8{0x01} ** 32;
+    const hash1 = @as([32]u8, @splat(0x01));
     try pipeline.recordSubmission(hash1, p1, 2000);
     try std.testing.expectEqual(@as(usize, 1), pipeline.inFlightCount());
 
     const p2 = try pipeline.prepare(request, 2000);
-    const hash2 = [_]u8{0x02} ** 32;
+    const hash2 = @as([32]u8, @splat(0x02));
     try pipeline.recordSubmission(hash2, p2, 2000);
     try std.testing.expectEqual(@as(usize, 2), pipeline.inFlightCount());
 
@@ -559,7 +559,7 @@ test "end-to-end - prepare, submit, confirm lifecycle" {
     try std.testing.expectEqual(@as(u64, 4 * 25_000_000_000 + 5 * 1_000_000_000), prepared.gas_fees.max_fee_per_gas);
 
     // 2. Submit
-    const tx_hash = [_]u8{0xDE} ** 32;
+    const tx_hash = @as([32]u8, @splat(0xDE));
     try pipeline.recordSubmission(tx_hash, prepared, 2000);
     try std.testing.expectEqual(@as(usize, 1), pipeline.inFlightCount());
     try std.testing.expectEqual(@as(usize, 1), nonce_mgr.pendingCount());
@@ -590,7 +590,7 @@ test "end-to-end - prepare, submit, confirm lifecycle" {
 
 /// Deterministic, collision-free tx hash for a given (thread, iteration).
 fn stressHash(thread_id: u64, k: u64) [32]u8 {
-    var h = [_]u8{0} ** 32;
+    var h = @as([32]u8, @splat(0));
     std.mem.writeInt(u64, h[0..8], thread_id, .little);
     std.mem.writeInt(u64, h[8..16], k, .little);
     return h;

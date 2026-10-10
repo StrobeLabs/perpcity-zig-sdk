@@ -68,7 +68,7 @@ test "getPerpBeacon - returns correct beacon address" {
 
 test "getPerpBeacon - returns custom beacon address" {
     var p = makeTestPerpData();
-    var custom_beacon: types.Address = [_]u8{0} ** 20;
+    var custom_beacon: types.Address = @splat(0);
     custom_beacon[0] = 0xAB;
     custom_beacon[19] = 0xCD;
     p.beacon = custom_beacon;
@@ -111,7 +111,7 @@ test "getPerpFees - liquidation fee is largest" {
 
 test "getPerpAddress - returns perp field" {
     var p = makeTestPerpData();
-    const addr: types.Address = [_]u8{0xCC} ** 20;
+    const addr: types.Address = @splat(0xCC);
     p.perp = addr;
     try std.testing.expectEqual(addr, perp.getPerpAddress(p));
 }

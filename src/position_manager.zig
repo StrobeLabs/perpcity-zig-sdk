@@ -219,8 +219,8 @@ test "PositionManager - distinct perps with the same pos_id coexist" {
     var mgr = PositionManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    const perp_a: [20]u8 = [_]u8{0xAA} ** 20;
-    const perp_b: [20]u8 = [_]u8{0xBB} ** 20;
+    const perp_a: [20]u8 = @splat(0xAA);
+    const perp_b: [20]u8 = @splat(0xBB);
 
     try mgr.track(.{ .perp = perp_a, .position_id = 1, .is_long = true, .is_maker = false, .entry_price = 100, .margin = 10 });
     try mgr.track(.{ .perp = perp_b, .position_id = 1, .is_long = false, .is_maker = false, .entry_price = 200, .margin = 20 });

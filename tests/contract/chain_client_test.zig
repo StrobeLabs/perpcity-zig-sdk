@@ -9,7 +9,7 @@ const EthChainClient = sdk.chain_client.EthChainClient;
 // must free cleanly under the testing allocator.
 test "EthChainClient raw-key create/destroy is leak-clean and has no KMS signer" {
     const alloc = std.testing.allocator;
-    const private_key = [_]u8{0x11} ** 32;
+    const private_key = @as([32]u8, @splat(0x11));
 
     const ec = try EthChainClient.create(alloc, "http://localhost:8545", private_key);
     defer ec.destroy();
@@ -35,7 +35,7 @@ test "EthChainClient raw-key create/destroy is leak-clean and has no KMS signer"
 // the provider + owned URL copies must free cleanly under the testing allocator.
 test "createWithFallback builds a multi-endpoint read client, leak-clean" {
     const alloc = std.testing.allocator;
-    const private_key = [_]u8{0x22} ** 32;
+    const private_key = @as([32]u8, @splat(0x22));
     const urls = [_][]const u8{ "http://primary:8545", "http://backup:8545" };
 
     const ec = try EthChainClient.createWithFallback(alloc, &urls, private_key, .{});
@@ -51,7 +51,7 @@ test "createWithFallback builds a multi-endpoint read client, leak-clean" {
 
 test "createWithFallback accepts a single endpoint and rejects an empty list" {
     const alloc = std.testing.allocator;
-    const private_key = [_]u8{0x33} ** 32;
+    const private_key = @as([32]u8, @splat(0x33));
 
     const one = [_][]const u8{"http://only:8545"};
     const ec = try EthChainClient.createWithFallback(alloc, &one, private_key, .{});
@@ -68,19 +68,19 @@ test "createWithFallback accepts a single endpoint and rejects an empty list" {
 // AWS credentials), so the KMS signing path is exercised by integration, not CI.
 test "KMS constructors have the intended signatures (compile-time)" {
     const create_info = @typeInfo(@TypeOf(EthChainClient.createWithKms)).@"fn";
-    try std.testing.expectEqual(@as(usize, 4), create_info.params.len);
-    try std.testing.expect(create_info.params[0].type.? == std.mem.Allocator);
-    try std.testing.expect(create_info.params[1].type.? == []const u8); // rpc_url
-    try std.testing.expect(create_info.params[2].type.? == []const u8); // region
-    try std.testing.expect(create_info.params[3].type.? == []const u8); // key_id
+    try std.testing.expectEqual(@as(usize, 4), create_info.param_types.len);
+    try std.testing.expect(create_info.param_types[0].? == std.mem.Allocator);
+    try std.testing.expect(create_info.param_types[1].? == []const u8); // rpc_url
+    try std.testing.expect(create_info.param_types[2].? == []const u8); // region
+    try std.testing.expect(create_info.param_types[3].? == []const u8); // key_id
     try std.testing.expect(@typeInfo(create_info.return_type.?).error_union.payload == *EthChainClient);
 
     const init_info = @typeInfo(@TypeOf(sdk.context.PerpCityContext.initWithKms)).@"fn";
-    try std.testing.expectEqual(@as(usize, 5), init_info.params.len);
-    try std.testing.expect(init_info.params[0].type.? == std.mem.Allocator);
-    try std.testing.expect(init_info.params[1].type.? == []const u8); // rpc_url
-    try std.testing.expect(init_info.params[2].type.? == []const u8); // region
-    try std.testing.expect(init_info.params[3].type.? == []const u8); // key_id
-    try std.testing.expect(init_info.params[4].type.? == sdk.types.PerpCityDeployments);
+    try std.testing.expectEqual(@as(usize, 5), init_info.param_types.len);
+    try std.testing.expect(init_info.param_types[0].? == std.mem.Allocator);
+    try std.testing.expect(init_info.param_types[1].? == []const u8); // rpc_url
+    try std.testing.expect(init_info.param_types[2].? == []const u8); // region
+    try std.testing.expect(init_info.param_types[3].? == []const u8); // key_id
+    try std.testing.expect(init_info.param_types[4].? == sdk.types.PerpCityDeployments);
     try std.testing.expect(@typeInfo(init_info.return_type.?).error_union.payload == sdk.context.PerpCityContext);
 }

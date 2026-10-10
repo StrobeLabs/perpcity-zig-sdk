@@ -132,7 +132,7 @@ test "getUserWalletAddress - returns zero address" {
 }
 
 test "getUserWalletAddress - returns custom address" {
-    var custom_addr: types.Address = [_]u8{0} ** 20;
+    var custom_addr: types.Address = @splat(0);
     custom_addr[0] = 0xDE;
     custom_addr[1] = 0xAD;
     custom_addr[18] = 0xBE;
@@ -150,9 +150,9 @@ test "getUserWalletAddress - returns custom address" {
 }
 
 test "getUserWalletAddress - different users have different addresses" {
-    var addr1: types.Address = [_]u8{0} ** 20;
+    var addr1: types.Address = @splat(0);
     addr1[0] = 0x01;
-    var addr2: types.Address = [_]u8{0} ** 20;
+    var addr2: types.Address = @splat(0);
     addr2[0] = 0x02;
 
     const user_a = types.UserData{

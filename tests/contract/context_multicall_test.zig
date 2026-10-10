@@ -8,7 +8,7 @@ const MockChainClient = sdk.testing.mock_chain_client.MockChainClient;
 const multicall = sdk.multicall;
 
 fn addr(b: u8) types.Address {
-    return [_]u8{b} ** 20;
+    return @as([20]u8, @splat(b));
 }
 
 fn testDeployments() types.PerpCityDeployments {
