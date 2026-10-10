@@ -240,7 +240,7 @@ pub fn registerModules(
             allocator,
             module_registry_abi.register_module_selector,
             &.{
-                .{ .uint256 = @as(u256, @intFromEnum(entry.kind)) },
+                .{ .uint256 = @as(u256, @backingInt(entry.kind)) },
                 .{ .address = entry.addr },
             },
         );
@@ -320,10 +320,10 @@ test "artifactPath builds correct path" {
 }
 
 test "deploymentsFrom maps fields correctly" {
-    const a1: types.Address = [_]u8{1} ** 20;
-    const a2: types.Address = [_]u8{2} ** 20;
-    const a3: types.Address = [_]u8{3} ** 20;
-    const a4: types.Address = [_]u8{4} ** 20;
+    const a1: types.Address = @splat(1);
+    const a2: types.Address = @splat(2);
+    const a3: types.Address = @splat(3);
+    const a4: types.Address = @splat(4);
 
     const dc: DeployedContracts = .{
         .perp_factory = a1,

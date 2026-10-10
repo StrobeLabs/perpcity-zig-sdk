@@ -11,7 +11,7 @@ const Topics = events.Topics;
 // =============================================================================
 
 test "topic hashes are 32-byte non-zero values" {
-    const zero = [_]u8{0} ** 32;
+    const zero = @as([32]u8, @splat(0));
     try std.testing.expect(!std.mem.eql(u8, &Topics.PERP_CREATED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.MAKER_OPENED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.TAKER_OPENED, &zero));
@@ -85,12 +85,12 @@ test "identifyEvent - returns index_updated for INDEX_UPDATED topic" {
 }
 
 test "identifyEvent - returns null for unknown topic" {
-    const unknown = [_]u8{0xff} ** 32;
+    const unknown = @as([32]u8, @splat(0xff));
     try std.testing.expectEqual(@as(?EventType, null), events.identifyEvent(unknown));
 }
 
 test "identifyEvent - returns null for zero topic" {
-    const zero = [_]u8{0} ** 32;
+    const zero = @as([32]u8, @splat(0));
     try std.testing.expectEqual(@as(?EventType, null), events.identifyEvent(zero));
 }
 
@@ -168,8 +168,8 @@ test "matchingCount - filtered subscription matches only its perp" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const perp_a: types.Address = [_]u8{0xAA} ** 20;
-    const perp_b: types.Address = [_]u8{0xBB} ** 20;
+    const perp_a: types.Address = @splat(0xAA);
+    const perp_b: types.Address = @splat(0xBB);
 
     _ = try registry.subscribe(.maker_opened, perp_a);
 
@@ -184,7 +184,7 @@ test "matchingCount - unfiltered subscription matches any perp" {
 
     _ = try registry.subscribe(.maker_opened, null);
 
-    const perp_a: types.Address = [_]u8{0xAA} ** 20;
+    const perp_a: types.Address = @splat(0xAA);
     try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, perp_a));
     try std.testing.expectEqual(@as(usize, 1), registry.matchingCount(.maker_opened, null));
 }
@@ -193,8 +193,8 @@ test "matchingCount - mixed filtered and unfiltered subscriptions" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const perp_a: types.Address = [_]u8{0xAA} ** 20;
-    const perp_b: types.Address = [_]u8{0xBB} ** 20;
+    const perp_a: types.Address = @splat(0xAA);
+    const perp_b: types.Address = @splat(0xBB);
 
     _ = try registry.subscribe(.maker_opened, perp_a);
     _ = try registry.subscribe(.maker_opened, null);

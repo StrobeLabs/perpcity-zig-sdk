@@ -46,7 +46,7 @@ test "getMarkPrice - returns null on cache miss" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const perp_id = [_]u8{0xAA} ** 20;
+    const perp_id = @as([20]u8, @splat(0xAA));
     const result = cache.getMarkPrice(perp_id, 100);
     try std.testing.expect(result == null);
 }
@@ -55,7 +55,7 @@ test "putMarkPrice/getMarkPrice - stores and retrieves price" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const perp_id = [_]u8{0xBB} ** 20;
+    const perp_id = @as([20]u8, @splat(0xBB));
     try cache.putMarkPrice(perp_id, 1850.50, 100);
 
     const result = cache.getMarkPrice(perp_id, 101);
@@ -67,7 +67,7 @@ test "getMarkPrice - returns null after expiry" {
     var cache = StateCache.init(std.testing.allocator, .{ .fast_ttl = 2 });
     defer cache.deinit();
 
-    const perp_id = [_]u8{0xCC} ** 20;
+    const perp_id = @as([20]u8, @splat(0xCC));
     try cache.putMarkPrice(perp_id, 2000.0, 100);
 
     // Still valid at 101 (expires_at = 102)
@@ -84,7 +84,7 @@ test "putMarkPrice - overwrites previous value for same perp_id" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const perp_id = [_]u8{0xDD} ** 20;
+    const perp_id = @as([20]u8, @splat(0xDD));
     try cache.putMarkPrice(perp_id, 1000.0, 100);
     try cache.putMarkPrice(perp_id, 2000.0, 100);
 
@@ -101,7 +101,7 @@ test "getFundingRate - returns null on cache miss" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const perp_id = [_]u8{0x01} ** 20;
+    const perp_id = @as([20]u8, @splat(0x01));
     try std.testing.expect(cache.getFundingRate(perp_id, 100) == null);
 }
 
@@ -109,7 +109,7 @@ test "putFundingRate/getFundingRate - stores and retrieves rate" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const perp_id = [_]u8{0x02} ** 20;
+    const perp_id = @as([20]u8, @splat(0x02));
     const rate: i256 = -999_999;
     try cache.putFundingRate(perp_id, rate, 100);
 
@@ -122,7 +122,7 @@ test "getFundingRate - returns null after expiry" {
     var cache = StateCache.init(std.testing.allocator, .{ .fast_ttl = 2 });
     defer cache.deinit();
 
-    const perp_id = [_]u8{0x03} ** 20;
+    const perp_id = @as([20]u8, @splat(0x03));
     try cache.putFundingRate(perp_id, 12345, 100);
 
     try std.testing.expect(cache.getFundingRate(perp_id, 101) != null);
@@ -169,7 +169,7 @@ test "getFees - returns null on cache miss" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const addr = [_]u8{0xAA} ** 20;
+    const addr = @as([20]u8, @splat(0xAA));
     try std.testing.expect(cache.getFees(addr, 100) == null);
 }
 
@@ -177,7 +177,7 @@ test "putFees/getFees - stores and retrieves fees" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const addr = [_]u8{0xBB} ** 20;
+    const addr = @as([20]u8, @splat(0xBB));
     const fees = CachedFees{
         .creator_fee = 0.001,
         .insurance_fee = 0.002,
@@ -198,7 +198,7 @@ test "getFees - returns null after slow TTL expiry" {
     var cache = StateCache.init(std.testing.allocator, .{ .slow_ttl = 60 });
     defer cache.deinit();
 
-    const addr = [_]u8{0xCC} ** 20;
+    const addr = @as([20]u8, @splat(0xCC));
     const fees = CachedFees{
         .creator_fee = 0.001,
         .insurance_fee = 0.002,
@@ -221,7 +221,7 @@ test "getBounds - returns null on cache miss" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const addr = [_]u8{0x11} ** 20;
+    const addr = @as([20]u8, @splat(0x11));
     try std.testing.expect(cache.getBounds(addr, 100) == null);
 }
 
@@ -229,7 +229,7 @@ test "putBounds/getBounds - stores and retrieves bounds" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const addr = [_]u8{0x22} ** 20;
+    const addr = @as([20]u8, @splat(0x22));
     const b = CachedBounds{
         .min_margin = 0.1,
         .min_taker_leverage = 1.0,
@@ -251,7 +251,7 @@ test "invalidateFastLayer - clears mark prices and funding rates" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const perp_id = [_]u8{0xFF} ** 20;
+    const perp_id = @as([20]u8, @splat(0xFF));
     try cache.putMarkPrice(perp_id, 1850.0, 100);
     try cache.putFundingRate(perp_id, 42, 100);
     cache.putUsdcBalance(1000.0, 100);
@@ -273,9 +273,9 @@ test "invalidateFastLayer - preserves fees and bounds" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const fees_addr = [_]u8{0xAA} ** 20;
-    const bounds_addr = [_]u8{0xBB} ** 20;
-    const perp_id = [_]u8{0xCC} ** 20;
+    const fees_addr = @as([20]u8, @splat(0xAA));
+    const bounds_addr = @as([20]u8, @splat(0xBB));
+    const perp_id = @as([20]u8, @splat(0xCC));
 
     const fees = CachedFees{
         .creator_fee = 0.001,
@@ -315,8 +315,8 @@ test "StateCache - respects custom TTL values" {
     });
     defer cache.deinit();
 
-    const perp_id = [_]u8{0x01} ** 20;
-    const fees_addr = [_]u8{0x02} ** 20;
+    const perp_id = @as([20]u8, @splat(0x01));
+    const fees_addr = @as([20]u8, @splat(0x02));
 
     try cache.putMarkPrice(perp_id, 100.0, 1000);
     try cache.putFees(fees_addr, .{
@@ -343,9 +343,9 @@ test "StateCache - supports multiple perp IDs simultaneously" {
     var cache = StateCache.init(std.testing.allocator, .{});
     defer cache.deinit();
 
-    const perp_a = [_]u8{0x01} ** 20;
-    const perp_b = [_]u8{0x02} ** 20;
-    const perp_c = [_]u8{0x03} ** 20;
+    const perp_a = @as([20]u8, @splat(0x01));
+    const perp_b = @as([20]u8, @splat(0x02));
+    const perp_c = @as([20]u8, @splat(0x03));
 
     try cache.putMarkPrice(perp_a, 100.0, 1000);
     try cache.putMarkPrice(perp_b, 200.0, 1000);

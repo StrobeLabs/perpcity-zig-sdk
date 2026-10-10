@@ -40,7 +40,7 @@ test "confirmNonce removes from pending" {
     defer mgr.deinit();
 
     const n = mgr.acquireNonce();
-    try mgr.trackSubmission(n, [_]u8{0xAB} ** 32);
+    try mgr.trackSubmission(n, @as([32]u8, @splat(0xAB)));
     try std.testing.expectEqual(@as(usize, 1), mgr.pendingCount());
 
     mgr.confirmNonce(n);
@@ -57,9 +57,9 @@ test "pendingCount tracks multiple submissions" {
     const n1 = mgr.acquireNonce();
     const n2 = mgr.acquireNonce();
 
-    try mgr.trackSubmission(n0, [_]u8{0x01} ** 32);
-    try mgr.trackSubmission(n1, [_]u8{0x02} ** 32);
-    try mgr.trackSubmission(n2, [_]u8{0x03} ** 32);
+    try mgr.trackSubmission(n0, @as([32]u8, @splat(0x01)));
+    try mgr.trackSubmission(n1, @as([32]u8, @splat(0x02)));
+    try mgr.trackSubmission(n2, @as([32]u8, @splat(0x03)));
     try std.testing.expectEqual(@as(usize, 3), mgr.pendingCount());
 
     mgr.confirmNonce(n1);
@@ -75,7 +75,7 @@ test "resync resets nonce and clears pending" {
     defer mgr.deinit();
 
     const n = mgr.acquireNonce();
-    try mgr.trackSubmission(n, [_]u8{0xFF} ** 32);
+    try mgr.trackSubmission(n, @as([32]u8, @splat(0xFF)));
     try std.testing.expectEqual(@as(usize, 1), mgr.pendingCount());
 
     mgr.resync(200);
@@ -88,7 +88,7 @@ test "releaseNonce also removes from pending" {
     defer mgr.deinit();
 
     const n = mgr.acquireNonce();
-    try mgr.trackSubmission(n, [_]u8{0xCC} ** 32);
+    try mgr.trackSubmission(n, @as([32]u8, @splat(0xCC)));
     try std.testing.expectEqual(@as(usize, 1), mgr.pendingCount());
 
     mgr.releaseNonce(n);
@@ -115,7 +115,7 @@ const StressWorkers = struct {
         var i: u64 = 0;
         while (i < count) : (i += 1) {
             const n = base + i;
-            m.trackSubmission(n, [_]u8{0} ** 32) catch {};
+            m.trackSubmission(n, @as([32]u8, @splat(0))) catch {};
             m.confirmNonce(n);
         }
     }

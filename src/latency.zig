@@ -11,7 +11,7 @@ pub const LatencyTracker = struct {
         std.debug.assert(std.math.isPowerOfTwo(MAX_SAMPLES));
     }
 
-    samples: [MAX_SAMPLES]u64 = [_]u64{0} ** MAX_SAMPLES,
+    samples: [MAX_SAMPLES]u64 = @splat(0),
     sample_count: usize = 0,
     sample_index: usize = 0,
 

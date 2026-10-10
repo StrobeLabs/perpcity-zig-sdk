@@ -10,7 +10,7 @@ const revert = sdk.revert;
 const perp_abi = sdk.abi.perp_abi;
 
 fn addr(b: u8) types.Address {
-    return [_]u8{b} ** 20;
+    return @as([20]u8, @splat(b));
 }
 
 fn testDeployments() types.PerpCityDeployments {

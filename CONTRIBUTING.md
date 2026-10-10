@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- [Zig 0.16.0](https://ziglang.org/download/)
+- [Zig 0.17.0](https://ziglang.org/download/)
 - [Anvil](https://book.getfoundry.sh/anvil/) (for integration tests)
 
 ## Getting Started

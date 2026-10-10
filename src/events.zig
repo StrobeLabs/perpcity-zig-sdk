@@ -307,7 +307,7 @@ pub fn identifyEvent(topic0: [32]u8) ?EventType {
 // =============================================================================
 
 test "Topics are 32-byte non-zero hashes" {
-    const zero = [_]u8{0} ** 32;
+    const zero = @as([32]u8, @splat(0));
     try std.testing.expect(!std.mem.eql(u8, &Topics.PERP_CREATED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.MAKER_OPENED, &zero));
     try std.testing.expect(!std.mem.eql(u8, &Topics.TAKER_OPENED, &zero));
@@ -358,10 +358,10 @@ test "identifyEvent returns correct event type for each topic" {
 }
 
 test "identifyEvent returns null for unknown topic" {
-    const unknown = [_]u8{0xff} ** 32;
+    const unknown = @as([32]u8, @splat(0xff));
     try std.testing.expectEqual(@as(?EventType, null), identifyEvent(unknown));
 
-    const zero = [_]u8{0} ** 32;
+    const zero = @as([32]u8, @splat(0));
     try std.testing.expectEqual(@as(?EventType, null), identifyEvent(zero));
 }
 
@@ -399,8 +399,8 @@ test "EventRegistry matchingCount with perp filter" {
     var registry = EventRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    const perp_a: types.Address = [_]u8{0xAA} ** 20;
-    const perp_b: types.Address = [_]u8{0xBB} ** 20;
+    const perp_a: types.Address = @splat(0xAA);
+    const perp_b: types.Address = @splat(0xBB);
 
     _ = try registry.subscribe(.maker_opened, perp_a);
     _ = try registry.subscribe(.maker_opened, null);

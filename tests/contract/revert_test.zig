@@ -56,10 +56,10 @@ test "decode extracts an Error(string) reason without allocating" {
     var data: std.ArrayList(u8) = .empty;
     defer data.deinit(allocator);
     try data.appendSlice(allocator, &.{ 0x08, 0xc3, 0x79, 0xa0 });
-    try data.appendSlice(allocator, &([_]u8{0} ** 31 ++ [_]u8{0x20})); // offset = 32
-    try data.appendSlice(allocator, &([_]u8{0} ** 31 ++ [_]u8{msg.len})); // length = 4
+    try data.appendSlice(allocator, &(@as([31]u8, @splat(0)) ++ [_]u8{0x20})); // offset = 32
+    try data.appendSlice(allocator, &(@as([31]u8, @splat(0)) ++ [_]u8{msg.len})); // length = 4
     try data.appendSlice(allocator, msg);
-    try data.appendSlice(allocator, &([_]u8{0} ** (32 - msg.len))); // pad
+    try data.appendSlice(allocator, &@as([32 - msg.len]u8, @splat(0))); // pad
 
     const r = revert.decode(data.items);
     switch (r) {

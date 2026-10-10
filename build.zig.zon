@@ -1,12 +1,12 @@
 .{
     .name = .perpcity_zig_sdk,
-    .version = "0.6.2",
-    .minimum_zig_version = "0.16.0",
+    .version = "0.7.0",
+    .minimum_zig_version = "0.17.0",
     .fingerprint = 0xfab90a2f402a7502,
     .dependencies = .{
         .eth = .{
-            .url = "git+https://github.com/StrobeLabs/eth.zig.git?ref=v0.9.2#4231a3f4fb3d7f68e921ec0173597b539c809c69",
-            .hash = "eth_zig-0.9.2-efEm-hhkcwCXs5kcvGTnlDih_yrOcsay9VPuz7XM_5Wr",
+            .url = "git+https://github.com/StrobeLabs/eth.zig.git?ref=v0.10.0#b4a7017998f5285b6573a20837413c650699ebf2",
+            .hash = "eth_zig-0.10.0-efEm-q4HfAAiReyfdaqhxVYZ8gY92fvn1wg6g5tKsa8B",
         },
     },
     .paths = .{

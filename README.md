@@ -46,7 +46,7 @@ const sdk_dep = b.dependency("perpcity_sdk", .{ .target = target, .optimize = op
 exe.root_module.addImport("perpcity_sdk", sdk_dep.module("perpcity_sdk"));
 ```
 
-Requires **Zig 0.16.0**.
+Requires **Zig 0.17.0**.
 
 ## Quick Start
 

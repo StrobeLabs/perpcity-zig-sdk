@@ -16,7 +16,7 @@ fn enc(values: []const AbiValue) ![]u8 {
 
 fn mkLog(topics: []const [32]u8, data: []const u8) Log {
     return .{
-        .address = [_]u8{0xBE} ** 20,
+        .address = @as([20]u8, @splat(0xBE)),
         .topics = topics,
         .data = data,
         .block_number = 100,
@@ -34,7 +34,7 @@ test "decodeLogs decodes recognized logs and skips unknown topics" {
     const allocator = std.testing.allocator;
 
     const to_topics = [_][32]u8{events.Topics.TAKER_OPENED};
-    const unknown_topics = [_][32]u8{[_]u8{0xFF} ** 32};
+    const unknown_topics = [_][32]u8{@as([32]u8, @splat(0xFF))};
 
     // TakerOpened: posId + inline SwapResult(7 fields).
     const to_data = try enc(&.{
@@ -72,17 +72,17 @@ test "decodeLogs returns an empty slice for no logs" {
 // to parameter order/types or the return payload breaks the build.
 test "PerpEventWatcher.connect / pollNext have the intended signatures" {
     const connect_info = @typeInfo(@TypeOf(watcher.PerpEventWatcher.connect)).@"fn";
-    try std.testing.expectEqual(@as(usize, 5), connect_info.params.len);
-    try std.testing.expect(connect_info.params[0].type.? == std.mem.Allocator);
-    try std.testing.expect(connect_info.params[1].type.? == []const u8); // ws_url
-    try std.testing.expect(connect_info.params[2].type.? == []const u8); // rpc_url
-    try std.testing.expect(connect_info.params[3].type.? == types.Address);
-    try std.testing.expect(connect_info.params[4].type.? == watcher.WatchOpts);
+    try std.testing.expectEqual(@as(usize, 5), connect_info.param_types.len);
+    try std.testing.expect(connect_info.param_types[0].? == std.mem.Allocator);
+    try std.testing.expect(connect_info.param_types[1].? == []const u8); // ws_url
+    try std.testing.expect(connect_info.param_types[2].? == []const u8); // rpc_url
+    try std.testing.expect(connect_info.param_types[3].? == types.Address);
+    try std.testing.expect(connect_info.param_types[4].? == watcher.WatchOpts);
     try std.testing.expect(@typeInfo(connect_info.return_type.?).error_union.payload == *watcher.PerpEventWatcher);
 
     const poll_info = @typeInfo(@TypeOf(watcher.PerpEventWatcher.pollNext)).@"fn";
-    try std.testing.expectEqual(@as(usize, 2), poll_info.params.len);
-    try std.testing.expect(poll_info.params[0].type.? == *watcher.PerpEventWatcher);
-    try std.testing.expect(poll_info.params[1].type.? == std.mem.Allocator);
+    try std.testing.expectEqual(@as(usize, 2), poll_info.param_types.len);
+    try std.testing.expect(poll_info.param_types[0].? == *watcher.PerpEventWatcher);
+    try std.testing.expect(poll_info.param_types[1].? == std.mem.Allocator);
     try std.testing.expect(@typeInfo(poll_info.return_type.?).error_union.payload == []event_decode.DecodedEvent);
 }

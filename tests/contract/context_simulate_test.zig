@@ -37,7 +37,7 @@ const AbiValue = eth.abi_encode.AbiValue;
 // ---------------------------------------------------------------------------
 
 fn addr(b: u8) types.Address {
-    return [_]u8{b} ** 20;
+    return @as([20]u8, @splat(b));
 }
 
 fn testDeployments() types.PerpCityDeployments {
@@ -51,7 +51,7 @@ fn testDeployments() types.PerpCityDeployments {
 
 /// A non-empty canned eth_call return; any registered response marks the
 /// selector as "would not revert" for the preflight.
-const ok_return = [_]u8{0} ** 32;
+const ok_return = @as([32]u8, @splat(0));
 
 // ---------------------------------------------------------------------------
 // Direct chain_client.simulateContract

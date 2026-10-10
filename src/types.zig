@@ -7,10 +7,10 @@ pub const Address = [20]u8;
 pub const Bytes32 = [32]u8;
 
 /// Zero address constant.
-pub const ZERO_ADDRESS: Address = [_]u8{0} ** 20;
+pub const ZERO_ADDRESS: Address = @splat(0);
 
 /// Zero bytes32 constant.
-pub const ZERO_BYTES32: Bytes32 = [_]u8{0} ** 32;
+pub const ZERO_BYTES32: Bytes32 = @splat(0);
 
 /// Deployment addresses for the perpcity-contracts v0.1.0 stack.
 ///

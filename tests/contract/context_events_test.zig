@@ -17,7 +17,7 @@ const Log = eth.receipt.Log;
 // ---------------------------------------------------------------------------
 
 fn addr(b: u8) types.Address {
-    return [_]u8{b} ** 20;
+    return @as([20]u8, @splat(b));
 }
 
 fn testDeployments() types.PerpCityDeployments {
@@ -64,7 +64,7 @@ test "pollEvents decodes a batch of logs and skips unknown topics" {
     const dn_topics = [_][32]u8{events.Topics.DONATED};
     const oi_topics = [_][32]u8{events.Topics.OPEN_INTEREST_UPDATED};
     const to_topics = [_][32]u8{events.Topics.TAKER_OPENED};
-    const unknown_topics = [_][32]u8{[_]u8{0xFF} ** 32};
+    const unknown_topics = [_][32]u8{@as([32]u8, @splat(0xFF))};
 
     // TakerClosed: posId + inline SwapResult(7) + funding + utilFees + liqFee + isLiquidation.
     const tc_data = try enc(&.{
@@ -263,7 +263,7 @@ test "decodeEvent decodes PerpCreated, flattening Modules and ignoring trailing 
 
 test "decodeEvent returns null for an unknown topic0" {
     const allocator = std.testing.allocator;
-    const topics = [_][32]u8{[_]u8{0xAB} ** 32};
+    const topics = [_][32]u8{@as([32]u8, @splat(0xAB))};
     const data = try enc(&.{.{ .uint256 = 1 }});
     defer allocator.free(data);
 
