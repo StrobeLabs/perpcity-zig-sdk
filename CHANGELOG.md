@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-10-10
+
+### Changed
+
+- **Breaking:** requires Zig 0.17.0 (`minimum_zig_version`), and CI is pinned to 0.17.0. Consumers on Zig 0.16 should stay on v0.6.x.
+- Bumped eth.zig to v0.10.0 (the eth.zig Zig 0.17 release). Consumers pinning eth.zig directly must also use v0.10.0 to avoid duplicate-instance link collisions.
+
 ## [0.6.2] - 2026-09-22
 
 ### Fixed
