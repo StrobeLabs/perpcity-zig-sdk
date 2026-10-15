@@ -28,6 +28,9 @@ jobs:
       - name: Run unit tests
         run: zig build test
 
+      - name: Compile examples
+        run: zig build examples
+
   lint:
     runs-on: ubuntu-latest
 
@@ -41,7 +44,7 @@ jobs:
           version: 0.17.0
 
       - name: Format check
-        run: zig fmt --check src/ tests/
+        run: zig fmt --check src/ tests/ examples/
 
   integration-test:
     runs-on: ubuntu-latest

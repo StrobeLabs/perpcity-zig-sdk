@@ -26,6 +26,7 @@ If you're building a trading bot in Python or TypeScript, use [perpcity-sdk](htt
 - **Event streaming** -- Subscription registry for on-chain event processing
 - **Position manager** -- Stop-loss, take-profit, and trailing stop triggers
 - **Latency observability** -- Rolling window latency tracking with p50/p95/p99 percentiles
+- **Runnable examples** -- Example 
 
 ## Installation
 
@@ -121,6 +122,10 @@ zig build integration-test
 ```bash
 zig fmt --check src/ tests/
 ```
+
+### Examples
+examples/ has an example usage `view_market.zig` that gets the rpc url and and perp address from the environment. `build.zig` creates a module, executable, and step for this.
+
 
 ## Environment Setup
 

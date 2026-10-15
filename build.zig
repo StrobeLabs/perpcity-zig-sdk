@@ -85,4 +85,27 @@ pub fn build(b: *std.Build) void {
     const run_integration_tests = b.addRunArtifact(integration_tests);
     const integration_step = b.step("integration-test", "Run integration tests (requires Anvil + compiled mocks)");
     integration_step.dependOn(&run_integration_tests.step);
+
+    // Example market view module
+    const example_view_mod = b.createModule(.{
+        .root_source_file = b.path("examples/view_market.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    example_view_mod.addImport("perpcity_sdk", sdk_module);
+    example_view_mod.addImport("eth", eth_module);
+
+    // Only executable in the repo
+    const example_view = b.addExecutable(.{
+        .name = "view_market",
+        .root_module = example_view_mod,
+    });
+
+    const examples_step = b.step("examples", "Build all examples");
+    examples_step.dependOn(&example_view.step);
+
+    const run_example_view = b.addRunArtifact(example_view);
+    const run_example_view_step = b.step("run-example-view", "Run the view_market example");
+    run_example_view_step.dependOn(&run_example_view.step);
 }
