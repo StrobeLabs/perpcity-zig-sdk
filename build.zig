@@ -96,15 +96,18 @@ pub fn build(b: *std.Build) void {
     example_view_mod.addImport("perpcity_sdk", sdk_module);
     example_view_mod.addImport("eth", eth_module);
 
-    // Only executable in the repo
+    // First executable in the repo
     const example_view = b.addExecutable(.{
         .name = "view_market",
         .root_module = example_view_mod,
     });
 
+    // Compile target for the examples. Run by CI.
     const examples_step = b.step("examples", "Build all examples");
     examples_step.dependOn(&example_view.step);
 
+    // Build and run the view example. Makes a read-only network call. Needs environment vars PERP_ADDRESS
+    // and RPC_URL
     const run_example_view = b.addRunArtifact(example_view);
     const run_example_view_step = b.step("run-example-view", "Run the view_market example");
     run_example_view_step.dependOn(&run_example_view.step);
