@@ -26,6 +26,7 @@ If you're building a trading bot in Python or TypeScript, use [perpcity-sdk](htt
 - **Event streaming** -- Subscription registry for on-chain event processing
 - **Position manager** -- Stop-loss, take-profit, and trailing stop triggers
 - **Latency observability** -- Rolling window latency tracking with p50/p95/p99 percentiles
+- **Runnable examples** -- Self-contained programs in `examples/`, compiled in CI so they can't rot
 
 ## Installation
 
@@ -119,8 +120,37 @@ zig build integration-test
 ### Lint
 
 ```bash
-zig fmt --check src/ tests/
+zig fmt --check src/ tests/ examples/
 ```
+
+### Examples
+
+Runnable examples live in `examples/`. CI compiles them with `zig build examples`, so breaking changes are caught.
+
+**`view_market.zig`** -- A read-only market snapshot. It prints the mark price,
+index, funding rate, tick spacing, and fees for a single market.
+
+It reads two environment variables:
+
+- `RPC_URL` -- an Arbitrum RPC endpoint
+- `PERP_ADDRESS` -- the market contract address
+
+Run it with the following example commands for a sepolia market:
+
+```bash
+export RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
+export PERP_ADDRESS=0xf5b11be0f707741196fcdc3ad5ecc43eee619e15
+zig build run-example-view
+```
+
+**Finding a market address.** Go to the perp factory: https://sepolia.arbiscan.io/address/0xa54F81e7BD5C0d52d6fdE2ba40d0B1123d53E7a7#events. Find a PerpCreated event, and click "ABI". Then copy the perp address.
+
+To compile every example without running one:
+
+```bash
+zig build examples
+```
+
 
 ## Environment Setup
 
@@ -132,7 +162,7 @@ PRIVATE_KEY=your_private_key_here
 RPC_URL=https://your-rpc-url.com
 
 # Contract addresses (Arbitrum Sepolia)
-PERP_MANAGER_ADDRESS=0x...
+PERP_ADDRESS=0x...
 USDC_ADDRESS=0x...
 ```
 
