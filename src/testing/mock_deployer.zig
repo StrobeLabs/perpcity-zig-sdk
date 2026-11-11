@@ -109,7 +109,7 @@ pub fn loadBytecode(allocator: std.mem.Allocator, artifact_path: []const u8) ![]
 }
 
 // ---------------------------------------------------------------------------
-// Deployment orchestration (v0.1.0 layout)
+// Deployment orchestration (v1.0.0 layout)
 // ---------------------------------------------------------------------------
 
 pub fn deployAll(allocator: std.mem.Allocator, rpc_url: []const u8) !DeployedContracts {

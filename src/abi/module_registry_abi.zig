@@ -3,16 +3,15 @@ const Function = eth.abi_types.Function;
 const Event = eth.abi_types.Event;
 const keccak = eth.keccak;
 
-// IModuleRegistry v0.1.0
-// enum Module { Pricing, Funding, Fees, MarginRatios, Lockup, PriceImpact }
+// IModuleRegistry v1.0.0
+// enum Module { Pricing, Funding, Fees, MarginRatios, PriceImpact }
 
 pub const Module = enum(u8) {
     pricing = 0,
     funding = 1,
     fees = 2,
     margin_ratios = 3,
-    lockup = 4,
-    price_impact = 5,
+    price_impact = 4,
 };
 
 pub const register_module: Function = .{
@@ -25,6 +24,17 @@ pub const register_module: Function = .{
     .outputs = &.{},
 };
 pub const register_module_selector = keccak.selector("registerModule(uint8,address)");
+
+pub const unregister_module: Function = .{
+    .name = "unregisterModule",
+    .state_mutability = .nonpayable,
+    .inputs = &.{
+        .{ .name = "moduleType", .abi_type = .uint8 },
+        .{ .name = "module", .abi_type = .address },
+    },
+    .outputs = &.{},
+};
+pub const unregister_module_selector = keccak.selector("unregisterModule(uint8,address)");
 
 pub const modules: Function = .{
     .name = "modules",
@@ -47,3 +57,12 @@ pub const module_registered_event: Event = .{
     },
 };
 pub const module_registered_topic = keccak.hash("ModuleRegistered(uint8,address)");
+
+pub const module_unregistered_event: Event = .{
+    .name = "ModuleUnregistered",
+    .inputs = &.{
+        .{ .name = "moduleType", .abi_type = .uint8 },
+        .{ .name = "module", .abi_type = .address },
+    },
+};
+pub const module_unregistered_topic = keccak.hash("ModuleUnregistered(uint8,address)");

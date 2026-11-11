@@ -3,7 +3,7 @@ const sdk = @import("perpcity_sdk");
 const types = sdk.types;
 
 // All tests in this module are placeholders. They skip via `error.SkipZigTest`
-// because they require a live Anvil node with the v0.1.0 mock stack deployed.
+// because they require a live Anvil node with the mock stack deployed.
 // Enable them once the integration harness wires up `sdk.testing.setup.AnvilSetup`.
 
 test "approveUsdc - 100 USDC sets correct allowance" {

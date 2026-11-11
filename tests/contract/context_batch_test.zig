@@ -98,7 +98,8 @@ test "callBatch resolves each call by selector and flags missing ones" {
 }
 
 // ---------------------------------------------------------------------------
-// getPerpData now issues its five field reads as one batch. Assert the composite
+// getPerpData issues its five state reads as one batch, then prices the swap
+// fees from the pool state they returned. Assert the composite
 // output field-for-field (the selector-keyed mock resolves each entry).
 // ---------------------------------------------------------------------------
 
@@ -118,7 +119,7 @@ test "getPerpData composes fees, both bounds, mark, and beacon via callBatch" {
         .{ .address = addr(0xB4) }, // priceImpact
         .{ .address = addr(0xB5) }, // pricing
     });
-    // fees(): (creator, insurance, lp) scaled by 1e6.
+    // fees(liquidity, spots, emas): (creator, insurance, lp) scaled by 1e6.
     try setReturn(&mock, fees_abi.fees_selector, &.{
         .{ .uint256 = 10_000 },
         .{ .uint256 = 5_000 },
@@ -126,6 +127,8 @@ test "getPerpData composes fees, both bounds, mark, and beacon via callBatch" {
     });
     // liqFee()
     try setReturn(&mock, fees_abi.liq_fee_selector, &.{.{ .uint256 = 20_000 }});
+    // maxSwapFee(): creator + insurance + the maximum LP fee, scaled by 1e6.
+    try setReturn(&mock, fees_abi.max_swap_fee_selector, &.{.{ .uint256 = 24_000 }});
     // takerMarginRatios(): (init, liq, backstop) scaled by 1e6.
     try setReturn(&mock, margin_ratios_abi.taker_margin_ratios_selector, &.{
         .{ .uint256 = 100_000 },
@@ -159,6 +162,7 @@ test "getPerpData composes fees, both bounds, mark, and beacon via callBatch" {
     try expectApprox(0.005, data.fees.insurance_fee);
     try expectApprox(0.003, data.fees.lp_fee);
     try expectApprox(0.02, data.fees.liquidation_fee);
+    try expectApprox(0.024, data.fees.max_swap_fee);
 
     try expectApprox(0.1, data.taker_bounds.init_margin_ratio);
     try expectApprox(0.05, data.taker_bounds.liq_margin_ratio);
@@ -174,6 +178,68 @@ test "getPerpData composes fees, both bounds, mark, and beacon via callBatch" {
 
     // The batched read still seeds the mark-price cache.
     try expectApprox(4.0, try ctx.getMarkPriceCached(addr(0xBE)));
+}
+
+// ---------------------------------------------------------------------------
+// The LP fee is priced on-chain from the pool state, so getPerpData must hand
+// fees() the liquidity and AMM price it just read. Registering the answer for
+// that exact calldata only (no selector fallback) proves the arguments.
+// ---------------------------------------------------------------------------
+
+test "getPerpData quotes fees() at the pool's liquidity with the spot as its own EMA" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+
+    const q96: u256 = @as(u256, 1) << 96;
+    const amm_price: u256 = 4 * q96;
+    const liquidity: u256 = 7_000_000;
+
+    try setReturn(&mock, perp_abi.modules_selector, &.{
+        .{ .address = addr(0xB0) },
+        .{ .address = addr(0xB1) },
+        .{ .address = addr(0xB2) },
+        .{ .address = addr(0xB3) },
+        .{ .address = addr(0xB4) },
+        .{ .address = addr(0xB5) },
+    });
+    try setReturn(&mock, fees_abi.liq_fee_selector, &.{.{ .uint256 = 20_000 }});
+    try setReturn(&mock, fees_abi.max_swap_fee_selector, &.{.{ .uint256 = 24_000 }});
+    try setReturn(&mock, margin_ratios_abi.taker_margin_ratios_selector, &.{
+        .{ .uint256 = 100_000 }, .{ .uint256 = 50_000 }, .{ .uint256 = 20_000 },
+    });
+    try setReturn(&mock, margin_ratios_abi.maker_margin_ratios_selector, &.{
+        .{ .uint256 = 200_000 }, .{ .uint256 = 100_000 }, .{ .uint256 = 40_000 },
+    });
+    // poolState(): (tick, sqrtPrice, ammPrice, liquidity).
+    try setReturn(&mock, perp_abi.pool_state_selector, &.{
+        .{ .int256 = 0 },
+        .{ .uint256 = 2 * q96 },
+        .{ .uint256 = amm_price },
+        .{ .uint256 = liquidity },
+    });
+
+    // fees(uint128 liquidity, PricePair spots, PricePair emas) for exactly this
+    // pool state. The two PricePairs are static tuples, encoded inline.
+    const pair = [_]eth.abi_encode.AbiValue{ .{ .uint256 = amm_price }, .{ .uint256 = amm_price } };
+    const fees_calldata = try eth.abi_encode.encodeFunctionCall(allocator, fees_abi.fees_selector, &.{
+        .{ .uint256 = liquidity },
+        .{ .tuple = &pair },
+        .{ .tuple = &pair },
+    });
+    defer allocator.free(fees_calldata);
+    try std.testing.expectEqual(@as(usize, 4 + 5 * 32), fees_calldata.len);
+    const fees_ret = try eth.abi_encode.encodeValues(allocator, &.{ .{ .uint256 = 10_000 }, .{ .uint256 = 5_000 }, .{ .uint256 = 1_234 } });
+    defer allocator.free(fees_ret);
+    try mock.setResponseCalldata(fees_calldata, fees_ret);
+
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    const data = try ctx.getPerpData(addr(0xBE));
+    try expectApprox(0.01, data.fees.creator_fee);
+    try expectApprox(0.005, data.fees.insurance_fee);
+    try expectApprox(0.001234, data.fees.lp_fee);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +268,8 @@ test "getPerpData errors when a batched read fails" {
         .{ .uint256 = 3_000 },
     });
     try setReturn(&mock, fees_abi.liq_fee_selector, &.{.{ .uint256 = 20_000 }});
+    // maxSwapFee(): creator + insurance + the maximum LP fee, scaled by 1e6.
+    try setReturn(&mock, fees_abi.max_swap_fee_selector, &.{.{ .uint256 = 24_000 }});
     try setReturn(&mock, margin_ratios_abi.taker_margin_ratios_selector, &.{
         .{ .uint256 = 100_000 },
         .{ .uint256 = 50_000 },

@@ -116,6 +116,21 @@ test "retryHint drives liquidation-bot branching" {
     try std.testing.expectEqual(RetryHint.retry_smaller, revert.retryHint(.{ .contract_error = .insufficient_liquidity_to_fill }));
     try std.testing.expectEqual(RetryHint.retry, revert.retryHint(.{ .contract_error = .price_impact_too_high }));
     try std.testing.expectEqual(RetryHint.fatal, revert.retryHint(.{ .contract_error = .margin_too_low }));
+
+    // v1.0.0 additions. Physical closing capacity bounds how much the pool can
+    // absorb, so a smaller liquidation may fit.
+    try std.testing.expectEqual(RetryHint.retry_smaller, revert.retryHint(.{ .contract_error = .long_close_capacity_exceeded }));
+    try std.testing.expectEqual(RetryHint.retry_smaller, revert.retryHint(.{ .contract_error = .short_close_capacity_exceeded }));
+    // A stale beacon clears when the updater lands; a fee cap is a re-quote.
+    try std.testing.expectEqual(RetryHint.retry, revert.retryHint(.{ .contract_error = .stale_beacon_index }));
+    try std.testing.expectEqual(RetryHint.retry, revert.retryHint(.{ .contract_error = .beacon_index_unreadable }));
+    try std.testing.expectEqual(RetryHint.retry, revert.retryHint(.{ .contract_error = .max_total_fee_exceeded }));
+    try std.testing.expectEqual(RetryHint.retry, revert.retryHint(.{ .contract_error = .claim_not_ready }));
+    // Resending the same calldata cannot fix these.
+    try std.testing.expectEqual(RetryHint.fatal, revert.retryHint(.{ .contract_error = .deadline_expired }));
+    try std.testing.expectEqual(RetryHint.fatal, revert.retryHint(.{ .contract_error = .reduce_only_violated }));
+    try std.testing.expectEqual(RetryHint.fatal, revert.retryHint(.{ .contract_error = .health_not_improved }));
+    try std.testing.expectEqual(RetryHint.fatal, revert.retryHint(.{ .contract_error = .tvl_cap_exceeded }));
     try std.testing.expectEqual(RetryHint.retry, revert.retryHint(.empty));
     try std.testing.expectEqual(RetryHint.fatal, revert.retryHint(.{ .panic = 0x11 }));
 

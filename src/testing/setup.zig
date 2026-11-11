@@ -8,7 +8,7 @@ const AnvilProcess = anvil_mod.AnvilProcess;
 const DeployedContracts = mock_deployer.DeployedContracts;
 const PerpCityContext = context_mod.PerpCityContext;
 
-/// Full integration test setup: Anvil node + deployed mock contracts (v0.1.0
+/// Full integration test setup: Anvil node + deployed mock contracts (v1.0.0
 /// stack) + SDK context.
 ///
 /// Integration tests call `AnvilSetup.init` once, then drive the SDK against
@@ -24,14 +24,17 @@ pub const AnvilSetup = struct {
     /// `AnvilSetup` -- `init` writes through it. The embedded `PerpCityContext`
     /// owns its eth.zig objects on the heap (via `EthChainClient`), so it needs
     /// no post-move pointer fixup.
-    pub fn init(self: *AnvilSetup, allocator: std.mem.Allocator) !void {
-        return initWithPort(self, allocator, AnvilProcess.DEFAULT_PORT);
+    ///
+    /// `io` spawns the Anvil child process; pass `std.testing.io` from a test.
+    /// See `AnvilProcess.start`.
+    pub fn init(self: *AnvilSetup, allocator: std.mem.Allocator, io: std.Io) !void {
+        return initWithPort(self, allocator, io, AnvilProcess.DEFAULT_PORT);
     }
 
-    pub fn initWithPort(self: *AnvilSetup, allocator: std.mem.Allocator, port: u16) !void {
+    pub fn initWithPort(self: *AnvilSetup, allocator: std.mem.Allocator, io: std.Io, port: u16) !void {
         self.allocator = allocator;
 
-        self.anvil = try AnvilProcess.start(allocator, port);
+        self.anvil = try AnvilProcess.start(allocator, io, port);
         errdefer self.anvil.stop();
 
         self.contracts = try mock_deployer.deployAll(allocator, self.anvil.rpc_url);

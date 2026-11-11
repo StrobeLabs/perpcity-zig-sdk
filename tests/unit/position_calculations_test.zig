@@ -3,14 +3,15 @@ const sdk = @import("perpcity_sdk");
 const position = sdk.position;
 const types = sdk.types;
 
+/// Liquidation margin ratio the estimates below are priced at (5%).
+const liq_ratio: f64 = 0.05;
+
 fn makeRaw(perp_amt: i128, usd_amt: i128, margin: u128) types.PositionRawData {
     return .{
         .perp = types.ZERO_ADDRESS,
         .position_id = 1,
         .delta = position.packDelta(perp_amt, usd_amt),
         .margin = margin,
-        .liq_margin_ratio = 50_000,
-        .backstop_margin_ratio = 20_000,
         .last_cuml_funding_x96 = 0,
     };
 }
@@ -151,29 +152,29 @@ test "entryPrice - zero perp delta returns 0" {
 
 test "liquidationPrice - long liquidates below entry" {
     const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
-    const lp = position.liquidationPrice(raw, true, null, 0.0).?;
+    const lp = position.liquidationPrice(raw, true, null, liq_ratio, 0.0).?;
     try std.testing.expectApproxEqAbs(@as(f64, 1473.6842), lp, 0.001);
 }
 
 test "liquidationPrice - short liquidates above entry" {
     const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
-    const lp = position.liquidationPrice(raw, false, null, 0.0).?;
+    const lp = position.liquidationPrice(raw, false, null, liq_ratio, 0.0).?;
     try std.testing.expectApproxEqAbs(@as(f64, 1523.8095), lp, 0.001);
 }
 
 test "liquidationPrice - settled margin override" {
     const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
     // settled margin 50: long (1500 - 50)/0.95 = 1526.3158; short (1500 + 50)/1.05 = 1476.1905
-    try std.testing.expectApproxEqAbs(@as(f64, 1526.3158), position.liquidationPrice(raw, true, 50.0, 0.0).?, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f64, 1476.1905), position.liquidationPrice(raw, false, 50.0, 0.0).?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 1526.3158), position.liquidationPrice(raw, true, 50.0, liq_ratio, 0.0).?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 1476.1905), position.liquidationPrice(raw, false, 50.0, liq_ratio, 0.0).?, 0.001);
 }
 
 test "liquidationPrice - liquidation fee moves the price toward entry" {
     const raw = makeRaw(1_000_000, -1_500_000_000, 100_000_000);
     // liq fee 0.01 -> threshold 0.06: long (1500 - 100)/(1 - 0.06) = 1400/0.94 = 1489.3617
     //                                 short (1500 + 100)/(1 + 0.06) = 1600/1.06 = 1509.4340
-    const long_fee = position.liquidationPrice(raw, true, null, 0.01).?;
-    const short_fee = position.liquidationPrice(raw, false, null, 0.01).?;
+    const long_fee = position.liquidationPrice(raw, true, null, liq_ratio, 0.01).?;
+    const short_fee = position.liquidationPrice(raw, false, null, liq_ratio, 0.01).?;
     try std.testing.expectApproxEqAbs(@as(f64, 1489.3617), long_fee, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 1509.4340), short_fee, 0.001);
     // The fee shrinks the buffer, so liquidation triggers sooner (closer to the
@@ -185,17 +186,17 @@ test "liquidationPrice - liquidation fee moves the price toward entry" {
 test "liquidationPrice - long price is clamped to zero" {
     // 10k USDC margin pushes the long liquidation price below zero
     const raw = makeRaw(1_000_000, -1_500_000_000, 10_000_000_000);
-    try std.testing.expectEqual(@as(f64, 0.0), position.liquidationPrice(raw, true, null, 0.0).?);
+    try std.testing.expectEqual(@as(f64, 0.0), position.liquidationPrice(raw, true, null, liq_ratio, 0.0).?);
 }
 
 test "liquidationPrice - null when the position has no size" {
     const raw = makeRaw(0, 0, 100_000_000);
-    try std.testing.expectEqual(@as(?f64, null), position.liquidationPrice(raw, true, null, 0.0));
+    try std.testing.expectEqual(@as(?f64, null), position.liquidationPrice(raw, true, null, liq_ratio, 0.0));
 }
 
 test "liquidationPrice - null when margin is non-positive" {
     const raw = makeRaw(1_000_000, -1_500_000_000, 0);
-    try std.testing.expectEqual(@as(?f64, null), position.liquidationPrice(raw, true, null, 0.0));
+    try std.testing.expectEqual(@as(?f64, null), position.liquidationPrice(raw, true, null, liq_ratio, 0.0));
 }
 
 // =============================================================================
