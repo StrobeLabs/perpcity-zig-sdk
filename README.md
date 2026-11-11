@@ -23,7 +23,7 @@ This SDK tracks one [perpcity-contracts](https://github.com/StrobeLabs/perpcity-
 | 0.7.x | v0.1.0 | 0.17.0 |
 | 0.6.x | v0.1.0 | 0.16.0 |
 
-A mismatched SDK fails loudly on writes (the contract does not recognise the selector) and quietly on events (logs with an unknown topic are skipped), so check this before pointing a bot at a market.
+A mismatched SDK is not guaranteed to fail. Most writes revert because the contract does not recognise the selector, but calls whose signature is the same in both releases (`touch`, `donate`, `syncProtocolFee`, the fee collectors) still go through, reads can decode into the wrong fields, and events fail quietly because logs with an unknown topic are skipped. Confirm which release a market was deployed from before pointing a bot at it.
 
 ## Features
 

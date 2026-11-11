@@ -824,6 +824,9 @@ pub const PerpCityContext = struct {
     /// `allocator.free`. The ids are returned in first-seen event order. For a
     /// large block span, chunk the range as described on `pollEvents` and union
     /// the results.
+    ///
+    /// Errors `BatchCallFailed` if any ownership read fails, rather than
+    /// returning a list that silently omits that position.
     pub fn discoverOwnedPositions(
         self: *Self,
         perp: types.Address,
@@ -877,10 +880,12 @@ pub const PerpCityContext = struct {
         var owned: std.ArrayList(u256) = .empty;
         defer owned.deinit(self.allocator);
         for (results, candidates.items) |r, id| {
-            // positionOwner does not revert, so a failed entry is a node or
-            // contract fault for that id; skip it rather than decoding zero bytes.
-            if (!r.success) continue;
-            const vals = eth.abi_decode.decodeValues(r.bytes, &.{.address}, self.allocator) catch continue;
+            // positionOwner is a mapping getter that never reverts (an inactive
+            // id reads as the zero address), so a failed entry is a node or
+            // contract fault. Surface it: skipping the id would return a short
+            // list that looks like a complete one.
+            if (!r.success) return error.BatchCallFailed;
+            const vals = try eth.abi_decode.decodeValues(r.bytes, &.{.address}, self.allocator);
             defer chain_client.freeReturnValues(vals, self.allocator);
             if (std.mem.eql(u8, &vals[0].address, &owner)) try owned.append(self.allocator, id);
         }

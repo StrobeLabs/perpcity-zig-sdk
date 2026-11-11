@@ -145,6 +145,28 @@ test "discoverOwnedPositions follows a backstop to the position's new owner" {
     try std.testing.expectEqual(@as(usize, 0), theirs.len);
 }
 
+test "discoverOwnedPositions errors when an ownership read fails instead of omitting the position" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+
+    const owner = addr(0xA1);
+    const to1 = fx.positionTopics(events.Topics.TAKER_OPENED, 1, owner);
+    const to2 = fx.positionTopics(events.Topics.TAKER_OPENED, 2, owner);
+    const d_to = try fx.takerOpenedData();
+    defer allocator.free(d_to);
+    try mock.setLogs(&[_]Log{ mkLog(&to1, d_to), mkLog(&to2, d_to) });
+
+    // Only id 1 has an answer; the read for id 2 fails. positionOwner never
+    // reverts on-chain, so this is a fault, not a closed position.
+    try setPositionOwner(&mock, 1, owner);
+
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    try std.testing.expectError(error.BatchCallFailed, ctx.discoverOwnedPositions(addr(0xBE), owner, 0, 200));
+}
+
 test "positionId reads the id for position events and null for market-wide events" {
     const positionId = sdk.event_decode.positionId;
     try std.testing.expectEqual(
