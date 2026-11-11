@@ -20,7 +20,7 @@ pub const SentTx = struct {
 /// 4-byte selector table. The selector table is enough when a call's arguments
 /// don't change the answer; the calldata table lets a test return distinct
 /// results for the same function called with different arguments (e.g. per-id
-/// `ownerOf`).
+/// `positionOwner`).
 pub const MockChainClient = struct {
     allocator: std.mem.Allocator,
     /// Maps a 4-byte selector (first 4 bytes of the calldata) to owned canned
@@ -336,32 +336,65 @@ pub const MockChainClient = struct {
     }
 };
 
+fn wordFromU256(value: u256) [32]u8 {
+    var word: [32]u8 = undefined;
+    std.mem.writeInt(u256, &word, value, .big);
+    return word;
+}
+
 /// Build a canned success receipt (`status == 1`) carrying a single log emitted
-/// by `emitter`, with `topic0` as its only topic and the 32-byte big-endian
-/// `position_id` as its data. This is what the open/create wrappers scan to
-/// decode a position or perp id. The receipt's slices are allocated with
-/// `allocator`; free them with `freeReceipt` (or hand the receipt to
-/// `MockChainClient.setReceipt`, which frees it on `deinit`).
+/// by `emitter`, shaped like `MakerOpened` / `TakerOpened`: `topic0`, then the
+/// indexed `position_id` in `topics[1]` and the indexed `owner` in `topics[2]`,
+/// with empty data. This is what the open wrappers scan to read a position id.
+/// The receipt's slices are allocated with `allocator`; free them with
+/// `freeReceipt` (or hand the receipt to `MockChainClient.setReceipt`, which
+/// frees it on `deinit`).
 pub fn makeOpenReceipt(
     allocator: std.mem.Allocator,
     emitter: [20]u8,
     topic0: [32]u8,
     position_id: u256,
 ) !eth.receipt.TransactionReceipt {
+    const topics = try allocator.alloc([32]u8, 3);
+    errdefer allocator.free(topics);
+    topics[0] = topic0;
+    topics[1] = wordFromU256(position_id);
+    topics[2] = @splat(0);
+
+    const data = try allocator.alloc(u8, 0);
+    errdefer allocator.free(data);
+
+    return singleLogReceipt(allocator, emitter, topics, data);
+}
+
+/// Build a canned success receipt carrying a single log emitted by `emitter`
+/// with `topic0` as its only topic and the 32-byte big-endian `word` as its
+/// data - the shape of an event with no indexed parameters, such as
+/// `PerpCreated`, whose first data word carries the new perp address. Same
+/// ownership rules as `makeOpenReceipt`.
+pub fn makeDataWordReceipt(
+    allocator: std.mem.Allocator,
+    emitter: [20]u8,
+    topic0: [32]u8,
+    word: u256,
+) !eth.receipt.TransactionReceipt {
     const topics = try allocator.alloc([32]u8, 1);
     errdefer allocator.free(topics);
     topics[0] = topic0;
 
-    const data = try allocator.alloc(u8, 32);
+    const data = try allocator.dupe(u8, &wordFromU256(word));
     errdefer allocator.free(data);
-    var v = position_id;
-    var i: usize = 32;
-    while (i > 0) {
-        i -= 1;
-        data[i] = @truncate(v & 0xff);
-        v >>= 8;
-    }
 
+    return singleLogReceipt(allocator, emitter, topics, data);
+}
+
+/// Wrap one log (taking ownership of `topics` and `data`) in a success receipt.
+fn singleLogReceipt(
+    allocator: std.mem.Allocator,
+    emitter: [20]u8,
+    topics: [][32]u8,
+    data: []u8,
+) !eth.receipt.TransactionReceipt {
     const logs = try allocator.alloc(eth.receipt.Log, 1);
     errdefer allocator.free(logs);
     logs[0] = .{

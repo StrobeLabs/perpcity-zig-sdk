@@ -12,7 +12,7 @@ pub const ZERO_ADDRESS: Address = @splat(0);
 /// Zero bytes32 constant.
 pub const ZERO_BYTES32: Bytes32 = @splat(0);
 
-/// Deployment addresses for the perpcity-contracts v0.1.0 stack.
+/// Deployment addresses for the perpcity-contracts v1.0.0 stack.
 ///
 /// Each perp market is a separate contract deployed by the factory; market
 /// addresses are not stored here. Callers pass per-market `Perp` addresses
@@ -29,7 +29,7 @@ pub const PerpCityDeployments = struct {
     price_impact_module: ?Address = null,
 };
 
-/// Mirror of `struct Modules` in perpcity-contracts SharedStructs.sol.
+/// Mirror of `struct Modules` in perpcity-contracts Structs.sol.
 pub const Modules = struct {
     beacon: Address,
     fees: Address,
@@ -39,7 +39,7 @@ pub const Modules = struct {
     pricing: Address,
 };
 
-/// Mirror of `struct PricePair` in perpcity-contracts SharedStructs.sol.
+/// Mirror of `struct PricePair` in perpcity-contracts Structs.sol.
 pub const PricePair = struct {
     amm_price: u128,
     index: u128,
@@ -51,7 +51,7 @@ pub const PerpConfig = struct {
     modules: Modules,
 };
 
-/// Maker/Taker margin ratios returned by IMarginRatios v0.1.0.
+/// Maker/Taker margin ratios returned by IMarginRatios.
 /// All ratios are scaled by 1e6.
 pub const MarginRatios = struct {
     init: u24,
@@ -69,19 +69,29 @@ pub const Bounds = struct {
     max_leverage: f64,
 };
 
-/// Volume-based fees returned by IFees.fees().
+/// Fee rates for a market, as fractions (0.001 = 0.1%).
+///
+/// The LP fee is dynamic on-chain: `IFees.fees` prices it from the active
+/// liquidity and the gap between the spot AMM price and its EMA. `lp_fee` here
+/// is the rate at the pool's current liquidity with no volatility surcharge
+/// (spot taken as its own EMA), so a swap can pay more; `max_swap_fee` is the
+/// module's upper bound on creator + insurance + LP combined. The protocol fee
+/// is charged on top of these (`Perp.protocolFee`).
 pub const Fees = struct {
     creator_fee: f64,
     insurance_fee: f64,
     lp_fee: f64,
     liquidation_fee: f64,
+    max_swap_fee: f64,
 };
 
+/// Stored (unsettled) balances of a position. Margin ratios are no longer
+/// stored per position; read them from `PerpData.taker_bounds` /
+/// `maker_bounds`, or use `PerpCityContext.getPositionPreview` for the
+/// contract's own settled equity and liquidatable / backstoppable flags.
 pub const LiveDetails = struct {
     margin: f64,
     perp_delta: i256,
-    liq_margin_ratio: u24,
-    backstop_margin_ratio: u24,
 };
 
 /// Per-market metadata derived from on-chain reads.
@@ -117,8 +127,6 @@ pub const PositionRawData = struct {
     /// Packed BalanceDelta: amount0 in high 128 bits, amount1 in low 128 bits.
     delta: i256,
     margin: u128,
-    liq_margin_ratio: u24,
-    backstop_margin_ratio: u24,
     last_cuml_funding_x96: i256,
 };
 
@@ -129,7 +137,7 @@ pub const UserData = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Additional read structs (mirror perpcity-contracts v0.1.0 view returns)
+// Additional read structs (mirror perpcity-contracts v1.0.0 view returns)
 // ---------------------------------------------------------------------------
 
 /// Funding rate for a perp, derived from `Rates.fundingPerDay` (an int88 scaled
@@ -145,24 +153,110 @@ pub const FundingRate = struct {
     funding_per_day_raw: i256,
 };
 
-/// Maker (concentrated-liquidity) position detail from `Perp.makerDetails`.
-/// Only the leading, version-stable fields (tick range + liquidity) are
-/// exposed; the trailing fee/funding checkpoints are omitted.
+/// Mirror of `struct MakerFunding`: a maker's range-funding checkpoints.
+pub const MakerFunding = struct {
+    below_x96: i256,
+    within_inventory_x192: i256,
+};
+
+/// Mirror of `struct Rates`: the cached daily rates (scaled by 1e18 per day),
+/// the timestamp they began applying, and the Q96 mark cached at that touch.
+pub const Rates = struct {
+    funding_per_day: i256,
+    long_util_fee_per_day: u64,
+    short_util_fee_per_day: u64,
+    last_touch: u64,
+    last_mark: u256,
+};
+
+/// Maker (concentrated-liquidity) position detail from `Perp.makerDetails`: the
+/// stored (unsettled) range, liquidity, and settlement checkpoints. All zero
+/// for a taker position.
 pub const MakerDetails = struct {
     perp: Address,
     position_id: u256,
     tick_lower: i32,
     tick_upper: i32,
     liquidity: u128,
+    last_lp_fee_growth_inside_x128: u256,
+    last_cuml_funding: MakerFunding,
+    last_funding_correction_x128: i256,
 };
 
-/// Taker position detail from `Perp.takerDetails`: the utilization-fee payment
-/// checkpoints (X96 fixed-point).
+/// Taker position detail from `Perp.takerDetails`: the utilization checkpoints
+/// (X96 fixed-point) for the side the position is on. All zero for a maker.
 pub const TakerDetails = struct {
     perp: Address,
     position_id: u256,
-    last_long_util_payments_x96: u256,
-    last_short_util_payments_x96: u256,
+    last_util_payments_x96: u256,
+    last_reserve_util_payments_x96: u256,
+};
+
+/// Mirror of `struct PositionPreview` from `Perp.previewPosition`: a position
+/// settled to the current block without storage writes, plus its risk flags.
+/// Amounts use USDC decimals; `mark_price` is Q96. `settled_margin` and
+/// `equity` are signed and can report a deficit.
+///
+/// The flags describe eligibility, not a guarantee: a liquidation can still
+/// revert on physical capacity or price impact.
+pub const PositionPreview = struct {
+    perp: Address,
+    position_id: u256,
+    is_maker: bool,
+    mark_price: u256,
+    settled_margin: i256,
+    /// Combined LP and utilization earnings credited on settlement; 0 for takers.
+    pending_lp_fees: u256,
+    /// Positive is owed by the position.
+    pending_funding: i256,
+    pending_util: u256,
+    /// The reserve-directed part of `pending_util`, not an extra charge.
+    pending_reserve_util: u256,
+    value: u256,
+    unrealized_pnl: i256,
+    equity: i256,
+    meets_initial_margin: bool,
+    /// Whether a full-size liquidation is currently eligible.
+    liquidatable: bool,
+    backstoppable: bool,
+    nominal_liq_fee: u256,
+    payable_liq_fee: u256,
+};
+
+/// Full-book closing depth from `Perp.physicalCloseCapacity`, in perp atoms.
+/// Open interest on each side must stay within it; this is the admission
+/// limit, unlike the strict-band `Capacity` used for utilization fees.
+pub const PhysicalCloseCapacity = struct {
+    long_close: u128,
+    short_close: u128,
+};
+
+/// A beacon observation from `IBeacon.index()`: the Q96 index and the block
+/// timestamp (seconds) at which it was written.
+pub const IndexObservation = struct {
+    index: u256,
+    updated_at: u64,
+};
+
+/// Accounted-TVL headroom of a market, in USDC decimals. Fresh USDC ingress
+/// (opens, margin adds, donations, backstops) that would push `tvl` above
+/// `cap` reverts `TvlCapExceeded`.
+pub const TvlState = struct {
+    tvl: u256,
+    cap: u256,
+};
+
+/// An escrowed payout in a market's WithdrawalController (`claims(claimId)`).
+/// `created_at` is in seconds; the claim is releasable once the controller's
+/// current challenge window has elapsed since then.
+pub const Claim = struct {
+    original_amount: u128,
+    current_amount: u128,
+    recipient: Address,
+    created_at: u64,
+    /// `ClaimStatus`: 0 none, 1 pending, 2 completed, 3 cancelled.
+    status: u8,
+    paused: bool,
 };
 
 /// Market solvency state from `Perp.solvencyState`, used for bad-debt
@@ -183,17 +277,38 @@ pub const FeeFund = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Write call parameters (mirror SharedStructs.sol)
+// Write call parameters (mirror Structs.sol)
 // ---------------------------------------------------------------------------
+
+/// Deadline value meaning "never expires". Every position-changing call takes
+/// a `deadline` (unix seconds); the contract reverts `DeadlineExpired` once
+/// `block.timestamp` is past it. Prefer a real deadline for anything that can
+/// sit in a mempool.
+pub const NO_DEADLINE: u64 = std.math.maxInt(u64);
+
+/// `max_total_fee` value meaning "no cap on the swap fee".
+pub const NO_FEE_CAP: u256 = std.math.maxInt(u256);
+
+/// Mirror of `struct WithdrawalConfig`: the creator-supplied instant-payout
+/// rate limit (USDC decimals) and the claim release delay (seconds, must be
+/// nonzero) for a new market's WithdrawalController.
+pub const WithdrawalConfig = struct {
+    capacity: u128,
+    refill_per_second: u128,
+    challenge_window: u48,
+};
 
 pub const CreatePerpParams = struct {
     owner: Address,
-    name: []const u8,
-    symbol: []const u8,
-    token_uri: []const u8,
+    /// The market's delayed authority (should be a timelock); must be nonzero.
+    governor: Address,
     modules: Modules,
     ema_window: u24,
+    /// Maximum accepted beacon-observation age in seconds. The beacon must
+    /// hold an observation at most this old when the market is created.
+    latency: u32,
     salt: Bytes32 = ZERO_BYTES32,
+    withdrawal_config: WithdrawalConfig,
 };
 
 pub const OpenMakerPositionParams = struct {
@@ -204,15 +319,21 @@ pub const OpenMakerPositionParams = struct {
     liquidity: u128,
     max_amt0_in: u256,
     max_amt1_in: u256,
+    /// Latest accepted block timestamp, in unix seconds.
+    deadline: u64 = NO_DEADLINE,
 };
 
 pub const OpenTakerPositionParams = struct {
-    /// Margin in human units (USDC).
+    /// Margin in human units (USDC). Swap fees are deducted from it.
     margin: f64,
     /// Signed perp amount. Positive = long, negative = short.
     perp_delta: i256,
     /// Slippage limit on the USD side of the swap.
     amt1_limit: u256,
+    /// Maximum total swap fee, in USDC decimals.
+    max_total_fee: u256 = NO_FEE_CAP,
+    /// Latest accepted block timestamp, in unix seconds.
+    deadline: u64 = NO_DEADLINE,
 };
 
 pub const AdjustMakerParams = struct {
@@ -222,6 +343,25 @@ pub const AdjustMakerParams = struct {
     liquidity_delta: i128,
     amt0_limit: u256,
     amt1_limit: u256,
+    /// Latest accepted block timestamp, in unix seconds.
+    deadline: u64 = NO_DEADLINE,
+};
+
+/// Atomic maker range replacement on the same position id (`moveMaker`).
+pub const MoveMakerParams = struct {
+    position_id: u256,
+    tick_lower: i24,
+    tick_upper: i24,
+    /// The replacement range's final liquidity; must be nonzero.
+    liquidity: u128,
+    remove_amt0_min: u256,
+    remove_amt1_min: u256,
+    add_amt0_max: u256,
+    add_amt1_max: u256,
+    /// Scaled by 1e6 (USDC 6-decimals).
+    margin_delta: i128 = 0,
+    /// Latest accepted block timestamp, in unix seconds.
+    deadline: u64 = NO_DEADLINE,
 };
 
 pub const AdjustTakerParams = struct {
@@ -230,11 +370,23 @@ pub const AdjustTakerParams = struct {
     margin_delta: i128,
     perp_delta: i256,
     amt1_limit: u256,
+    /// Maximum total swap fee, in USDC decimals.
+    max_total_fee: u256 = NO_FEE_CAP,
+    /// When true the adjustment may neither grow absolute exposure nor flip
+    /// side. Set it on closes: a partial liquidation landing first would
+    /// otherwise turn the same `perp_delta` into an opposite position.
+    reduce_only: bool = false,
+    /// Latest accepted block timestamp, in unix seconds.
+    deadline: u64 = NO_DEADLINE,
 };
 
 pub const LiquidateParams = struct {
     position_id: u256,
     fee_recipient: Address,
+    /// How much to liquidate: the absolute perp amount for a taker, or the
+    /// liquidity to remove for a maker. Must be nonzero and no larger than the
+    /// position; pass the full size for a full liquidation.
+    amount: u128,
 };
 
 pub const BackstopParams = struct {
@@ -242,6 +394,8 @@ pub const BackstopParams = struct {
     /// Margin in scaled (1e6) units.
     margin_in: u128,
     position_recipient: Address,
+    /// Latest accepted block timestamp, in unix seconds.
+    deadline: u64 = NO_DEADLINE,
 };
 
 // ---------------------------------------------------------------------------

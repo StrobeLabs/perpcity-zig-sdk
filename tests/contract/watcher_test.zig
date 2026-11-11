@@ -7,40 +7,21 @@ const events = sdk.events;
 const event_decode = sdk.event_decode;
 const watcher = sdk.watcher;
 
-const AbiValue = eth.abi_encode.AbiValue;
-const Log = eth.receipt.Log;
-
-fn enc(values: []const AbiValue) ![]u8 {
-    return eth.abi_encode.encodeValues(std.testing.allocator, values);
-}
-
-fn mkLog(topics: []const [32]u8, data: []const u8) Log {
-    return .{
-        .address = @as([20]u8, @splat(0xBE)),
-        .topics = topics,
-        .data = data,
-        .block_number = 100,
-        .transaction_hash = null,
-        .transaction_index = null,
-        .log_index = null,
-        .block_hash = null,
-        .removed = false,
-    };
-}
+const fx = @import("event_fixtures.zig");
+const Log = fx.Log;
+const enc = fx.enc;
+const mkLog = fx.mkLog;
 
 // The watcher's per-block decode step. Shared with pollEvents; tested directly
 // here since the watcher's WebSocket loop is integration-only.
 test "decodeLogs decodes recognized logs and skips unknown topics" {
     const allocator = std.testing.allocator;
 
-    const to_topics = [_][32]u8{events.Topics.TAKER_OPENED};
+    // TakerOpened: indexed (posId, owner); margin + SwapResult + checkpoint in data.
+    const to_topics = fx.positionTopics(events.Topics.TAKER_OPENED, 7, fx.addr(0xA1));
     const unknown_topics = [_][32]u8{@as([32]u8, @splat(0xFF))};
 
-    // TakerOpened: posId + inline SwapResult(7 fields).
-    const to_data = try enc(&.{
-        .{ .uint256 = 7 }, .{ .int256 = 0 },  .{ .uint256 = 0 }, .{ .int256 = 0 },
-        .{ .uint256 = 0 }, .{ .uint256 = 0 }, .{ .uint256 = 0 }, .{ .uint256 = 0 },
-    });
+    const to_data = try fx.takerOpenedData();
     defer allocator.free(to_data);
     const unknown_data = try enc(&.{.{ .uint256 = 1 }});
     defer allocator.free(unknown_data);

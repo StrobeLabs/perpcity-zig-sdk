@@ -3,6 +3,18 @@ const Function = eth.abi_types.Function;
 const Event = eth.abi_types.Event;
 const keccak = eth.keccak;
 
+// IProtocolFeeManager surface of perpcity-contracts v1.0.0.
+
+pub const owner: Function = .{
+    .name = "owner",
+    .state_mutability = .view,
+    .inputs = &.{},
+    .outputs = &.{
+        .{ .name = "", .abi_type = .address },
+    },
+};
+pub const owner_selector = keccak.selector("owner()");
+
 pub const protocol_fee: Function = .{
     .name = "protocolFee",
     .state_mutability = .view,

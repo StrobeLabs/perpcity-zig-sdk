@@ -98,12 +98,10 @@ test "getPositionRawData decodes the positions() tuple" {
     var mock = MockChainClient.init(allocator);
     defer mock.deinit();
 
-    // (int256 delta, uint128 margin, uint24 liq, uint24 backstop, int256 lastFunding)
+    // struct Position: (int256 delta, uint128 margin, int256 lastCumlFundingX96)
     try setReturn(&mock, perp_abi.positions_selector, &.{
         .{ .int256 = 123_456_789 },
         .{ .uint256 = 5_000_000 },
-        .{ .uint256 = 50_000 },
-        .{ .uint256 = 20_000 },
         .{ .int256 = -777 },
     });
 
@@ -115,8 +113,6 @@ test "getPositionRawData decodes the positions() tuple" {
     try std.testing.expectEqual(@as(u256, 42), raw.position_id);
     try std.testing.expectEqual(@as(i256, 123_456_789), raw.delta);
     try std.testing.expectEqual(@as(u128, 5_000_000), raw.margin);
-    try std.testing.expectEqual(@as(u24, 50_000), raw.liq_margin_ratio);
-    try std.testing.expectEqual(@as(u24, 20_000), raw.backstop_margin_ratio);
     try std.testing.expectEqual(@as(i256, -777), raw.last_cuml_funding_x96);
 }
 
@@ -181,7 +177,7 @@ test "getPerpData wires fees, both bounds, and mark price" {
         .{ .address = addr(0xB4) }, // priceImpact
         .{ .address = addr(0xB5) }, // pricing
     });
-    // fees(): (creator, insurance, lp) scaled by 1e6.
+    // fees(liquidity, spots, emas): (creator, insurance, lp) scaled by 1e6.
     try setReturn(&mock, fees_abi.fees_selector, &.{
         .{ .uint256 = 10_000 },
         .{ .uint256 = 5_000 },
@@ -189,6 +185,8 @@ test "getPerpData wires fees, both bounds, and mark price" {
     });
     // liqFee()
     try setReturn(&mock, fees_abi.liq_fee_selector, &.{.{ .uint256 = 20_000 }});
+    // maxSwapFee(): creator + insurance + the maximum LP fee, scaled by 1e6.
+    try setReturn(&mock, fees_abi.max_swap_fee_selector, &.{.{ .uint256 = 24_000 }});
     // takerMarginRatios(): (init, liq, backstop) scaled by 1e6.
     try setReturn(&mock, margin_ratios_abi.taker_margin_ratios_selector, &.{
         .{ .uint256 = 100_000 },
@@ -221,6 +219,7 @@ test "getPerpData wires fees, both bounds, and mark price" {
     try expectApprox(0.005, data.fees.insurance_fee);
     try expectApprox(0.003, data.fees.lp_fee);
     try expectApprox(0.02, data.fees.liquidation_fee);
+    try expectApprox(0.024, data.fees.max_swap_fee);
 
     try expectApprox(0.1, data.taker_bounds.init_margin_ratio);
     try expectApprox(0.05, data.taker_bounds.liq_margin_ratio);
@@ -282,23 +281,6 @@ test "getUserData decodes the USDC balance" {
     try std.testing.expectEqualSlices(u8, &addr(0x55), &ud.wallet_address);
     try expectApprox(12.345678, ud.usdc_balance);
     try std.testing.expectEqual(@as(usize, 0), ud.open_positions.len);
-}
-
-// ---------------------------------------------------------------------------
-// perp_factory.isPerp
-// ---------------------------------------------------------------------------
-
-test "perp_factory.isPerp decodes the bool" {
-    const allocator = std.testing.allocator;
-    var mock = MockChainClient.init(allocator);
-    defer mock.deinit();
-
-    try setReturn(&mock, perp_factory_abi.perps_selector, &.{.{ .boolean = true }});
-
-    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
-    defer ctx.deinit();
-
-    try std.testing.expect(try perp_factory.isPerp(&ctx, addr(0xBE)));
 }
 
 // ---------------------------------------------------------------------------

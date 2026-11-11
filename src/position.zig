@@ -68,7 +68,7 @@ pub fn positionValue(raw: types.PositionRawData, mark_price: f64) f64 {
 }
 
 /// Notional leverage at the supplied mark: value / margin. Returns +inf for
-/// zero margin (matches the v0.0.1 helper's behavior).
+/// zero margin.
 pub fn currentLeverage(raw: types.PositionRawData, mark_price: f64) f64 {
     const m = marginHuman(raw);
     if (m <= 0.0) return std.math.inf(f64);
@@ -92,8 +92,17 @@ pub fn entryPrice(raw: types.PositionRawData) f64 {
 /// value for an accurate estimate; `null` falls back to `raw.margin`, which
 /// ignores those pending settlements and is only a rough approximation.
 ///
+/// `liq_margin_ratio` is the live liquidation margin ratio as a fraction, for
+/// the position's role (`PerpData.taker_bounds.liq_margin_ratio` or
+/// `maker_bounds.liq_margin_ratio`). Ratios are no longer stored per position,
+/// so a governance change to the module moves every liquidation price.
+///
 /// `liq_fee_ratio` is the liquidation fee as a fraction of notional
 /// (`IFees.liqFee() / 1e6`); pass 0 to ignore it.
+///
+/// This is an off-chain estimate. For whether a position is liquidatable right
+/// now, use `PerpCityContext.getPositionPreview`, which is the contract's own
+/// answer.
 ///
 /// The margin ratio is `equity / value` on the position's *current* notional
 /// (`size * price`), and at liquidation the position must also cover the
@@ -109,6 +118,7 @@ pub fn liquidationPrice(
     raw: types.PositionRawData,
     is_long: bool,
     settled_margin: ?f64,
+    liq_margin_ratio: f64,
     liq_fee_ratio: f64,
 ) ?f64 {
     const entry = entryPrice(raw);
@@ -116,8 +126,7 @@ pub fn liquidationPrice(
     const margin = settled_margin orelse marginHuman(raw);
     if (size == 0.0 or margin <= 0.0) return null;
 
-    const liq_ratio = @as(f64, @floatFromInt(raw.liq_margin_ratio)) / constants.F64_1E6;
-    const threshold = liq_ratio + liq_fee_ratio;
+    const threshold = liq_margin_ratio + liq_fee_ratio;
     if (is_long) {
         const denom = 1.0 - threshold;
         if (denom <= 0.0) return null;
@@ -196,8 +205,6 @@ fn makeRaw(perp_amt: i128, usd_amt: i128, margin: u128) types.PositionRawData {
         .position_id = 1,
         .delta = packDelta(perp_amt, usd_amt),
         .margin = margin,
-        .liq_margin_ratio = 50_000,
-        .backstop_margin_ratio = 20_000,
         .last_cuml_funding_x96 = 0,
     };
 }
@@ -231,8 +238,6 @@ test "OpenPositionData accessors" {
         .live_details = .{
             .margin = 100.0,
             .perp_delta = 1_500_000,
-            .liq_margin_ratio = 50_000,
-            .backstop_margin_ratio = 20_000,
         },
     };
     try std.testing.expectEqual(@as(u256, 42), getPositionId(pos));

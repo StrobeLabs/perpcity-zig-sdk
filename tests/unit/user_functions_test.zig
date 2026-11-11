@@ -19,8 +19,6 @@ fn makeOpenPosition(pos_id: u256, is_maker: bool, perp_delta: i256) types.OpenPo
         .live_details = .{
             .margin = 100.0,
             .perp_delta = perp_delta,
-            .liq_margin_ratio = 50_000,
-            .backstop_margin_ratio = 20_000,
         },
     };
 }

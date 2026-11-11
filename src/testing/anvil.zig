@@ -10,8 +10,7 @@ pub const AnvilProcess = struct {
     child: std.process.Child,
     rpc_url: []const u8,
     allocator: std.mem.Allocator,
-    /// Blocking `std.Io` used to drive process/file operations. Zig 0.16
-    /// threads I/O explicitly through `std.Io` rather than via free functions.
+    /// The caller-supplied `std.Io` used to drive process/file operations.
     io: std.Io,
 
     /// Default port for Anvil when none is specified.
@@ -40,11 +39,14 @@ pub const AnvilProcess = struct {
     };
 
     /// Spawn an Anvil process on the given port and wait for it to be ready.
-    pub fn start(allocator: std.mem.Allocator, port: u16) !AnvilProcess {
+    ///
+    /// `io` must be able to spawn a child process and resolve `anvil` on PATH,
+    /// e.g. `std.testing.io` in a test or the `Io` handed to `main`. The
+    /// allocation-free `std.Io.Threaded.global_single_threaded` cannot: it has a
+    /// failing allocator and an empty environment, so the spawn errors.
+    pub fn start(allocator: std.mem.Allocator, io: std.Io, port: u16) !AnvilProcess {
         var port_buf: [5]u8 = undefined;
         const port_str = std.fmt.bufPrint(&port_buf, "{d}", .{port}) catch unreachable;
-
-        const io = std.Io.Threaded.global_single_threaded.io();
 
         // Anvil (foundry 1.x) prints its banner + "Listening on" to stdout, so
         // pipe stdout and ignore stderr. We close stdout once we've seen the
@@ -77,8 +79,8 @@ pub const AnvilProcess = struct {
     }
 
     /// Spawn Anvil on the default port (8546).
-    pub fn startDefault(allocator: std.mem.Allocator) !AnvilProcess {
-        return start(allocator, DEFAULT_PORT);
+    pub fn startDefault(allocator: std.mem.Allocator, io: std.Io) !AnvilProcess {
+        return start(allocator, io, DEFAULT_PORT);
     }
 
     /// Kill the Anvil process and free associated resources.

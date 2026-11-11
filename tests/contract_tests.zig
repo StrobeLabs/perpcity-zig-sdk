@@ -3,6 +3,7 @@
 // runs them. These tests drive the SDK's read path through the ChainClient
 // seam with an in-memory mock -- no network or Anvil required.
 comptime {
+    _ = @import("contract/abi_golden_test.zig");
     _ = @import("contract/context_read_test.zig");
     _ = @import("contract/context_getters_test.zig");
     _ = @import("contract/context_batch_test.zig");
