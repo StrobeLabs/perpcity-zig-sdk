@@ -3,11 +3,20 @@ pragma solidity 0.8.30;
 
 import "./MockPerp.sol";
 
+struct WithdrawalConfig {
+    uint128 capacity;
+    uint128 refillPerSecond;
+    uint48 challengeWindow;
+}
+
 /// @title MockPerpFactory
-/// @notice Deploys MockPerp instances and emits PerpCreated with the v0.1.0
-/// event signature so the SDK can decode the produced perp address.
+/// @notice Deploys MockPerp instances behind the v1.0.0 `createPerp` signature
+/// and emits the v1.0.0 `PerpCreated` event so the SDK can decode the produced
+/// perp address.
 contract MockPerpFactory {
-    mapping(address => bool) public perps;
+    error EmaWindowTooLow();
+    error ZeroAddress();
+    error ZeroWindow();
 
     event PerpCreated(
         address perp,
@@ -15,41 +24,31 @@ contract MockPerpFactory {
         Modules modules,
         uint256 initialIndex,
         uint24 emaWindow,
+        uint32 latency,
         uint256 protocolFee,
         uint160 sqrtPriceX96,
         int24 tick,
-        address owner,
-        string name,
-        string symbol,
-        string tokenUri
+        address owner
     );
 
     function createPerp(
         address owner,
-        string memory name,
-        string memory symbol,
-        string memory tokenUri,
+        address governor,
         Modules memory mods,
         uint24 emaWindow,
-        bytes32 salt
+        uint32 latency,
+        bytes32 salt,
+        WithdrawalConfig memory withdrawalConfig
     ) external returns (address perp) {
-        MockPerp p = new MockPerp(owner, mods, 0);
+        require(emaWindow != 0, EmaWindowTooLow());
+        require(governor != address(0), ZeroAddress());
+        require(withdrawalConfig.challengeWindow != 0, ZeroWindow());
+
+        // Stand-in for the WithdrawalController clone the real factory deploys.
+        address controller = address(uint160(uint256(keccak256(abi.encodePacked(msg.sender, salt, "controller")))));
+        MockPerp p = new MockPerp(owner, governor, controller, mods, emaWindow, latency);
         perp = address(p);
-        perps[perp] = true;
         bytes32 poolId = keccak256(abi.encodePacked(perp, salt));
-        emit PerpCreated(
-            perp,
-            poolId,
-            mods,
-            1e18,
-            emaWindow,
-            0,
-            uint160(1) << 96,
-            int24(0),
-            owner,
-            name,
-            symbol,
-            tokenUri
-        );
+        emit PerpCreated(perp, poolId, mods, 1 << 96, emaWindow, latency, 0, uint160(1) << 96, int24(0), owner);
     }
 }

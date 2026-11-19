@@ -2,7 +2,7 @@
 pragma solidity 0.8.30;
 
 /// @title MockMarginRatios
-/// @notice Minimal IMarginRatios implementation matching perpcity-contracts v0.1.0.
+/// @notice Minimal IMarginRatios implementation matching perpcity-contracts v1.0.0.
 /// All ratios scaled by 1e6.
 contract MockMarginRatios {
     uint24 public immutable INIT_MAKER;

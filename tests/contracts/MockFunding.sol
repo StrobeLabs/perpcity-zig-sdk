@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-struct PricePair {
-    uint128 ammPrice;
-    uint128 index;
-}
+import { PricePair } from "./MockFees.sol";
 
 /// @title MockFunding
 /// @notice Returns a configured constant funding rate. Outputs scaled by 1e18.
@@ -15,7 +12,7 @@ contract MockFunding {
         FUNDING_PER_DAY = fundingPerDay;
     }
 
-    function funding(PricePair memory, PricePair memory) external view returns (int88) {
+    function funding(PricePair calldata, PricePair calldata, uint256) external view returns (int88) {
         return FUNDING_PER_DAY;
     }
 }

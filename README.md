@@ -13,10 +13,24 @@ This SDK is designed for use cases where nanoseconds matter. Zig gives us:
 
 If you're building a trading bot in Python or TypeScript, use [perpcity-sdk](https://github.com/StrobeLabs/perpcity-sdk) or [perpcity-python-sdk](https://github.com/StrobeLabs/perpcity-python-sdk) instead. This SDK is for systems that need sub-millisecond transaction construction and direct EVM interaction with no abstraction tax.
 
+## Contract compatibility
+
+This SDK tracks one [perpcity-contracts](https://github.com/StrobeLabs/perpcity-contracts) release at a time. Function selectors and event layouts change between releases, so use the SDK line that matches the contracts your markets were deployed from:
+
+| SDK | perpcity-contracts | Zig |
+|-----|--------------------|-----|
+| 0.8.x | v1.0.0 | 0.17.0 |
+| 0.7.x | v0.1.0 | 0.17.0 |
+| 0.6.x | v0.1.0 | 0.16.0 |
+
+A mismatched SDK is not guaranteed to fail. Most writes revert because the contract does not recognise the selector, but calls whose signature is the same in both releases (`touch`, `donate`, `syncProtocolFee`, the fee collectors) still go through, reads can decode into the wrong fields, and events fail quietly because logs with an unknown topic are skipped. Confirm which release a market was deployed from before pointing a bot at it.
+
 ## Features
 
 - **Contract interaction** -- Read/write calls with comptime-computed selectors via [eth.zig](https://github.com/StrobeLabs/eth.zig)
-- **Position management** -- Open/close taker and maker positions, adjust margin and notional
+- **Position management** -- Open, adjust, and close taker and maker positions; move a maker range in place; liquidate and backstop
+- **On-chain position preview** -- The contract's own settled equity and liquidatable / backstoppable flags, with no off-chain health math
+- **Withdrawal claims** -- Find and release payouts the market's withdrawal controller escrowed instead of paying instantly
 - **HFT nonce manager** -- Lock-free atomic nonce acquisition, no RPC round-trip per transaction
 - **Gas cache** -- Pre-computed gas limits and fee caching to skip `estimateGas` calls
 - **Transaction pipeline** -- Combines nonce manager + gas cache for fire-and-forget submission
@@ -72,8 +86,34 @@ const perp_delta = try sdk.sizing.derivePerpDelta(1000.0, 10.0, mark_price, true
 const position = try sdk.perp_contract.openTaker(&ctx, perp, .{
     .margin = 1000.0,
     .perp_delta = perp_delta, // signed: positive = long, negative = short
-    .amt1_limit = 0, // USD-side slippage limit
+    .amt1_limit = max_usd_in, // USD-side slippage limit: most to pay for a long
+    .max_total_fee = 5_000_000, // cap the swap fee at 5 USDC (default: no cap)
+    .deadline = now_seconds + 60, // unix seconds (default: no deadline)
 });
+
+// Ask the contract how the position stands, settled to the current block.
+const preview = try position.preview();
+if (preview.liquidatable) { ... }
+
+// Close it. `reduce_only` stops a partial liquidation that lands first from
+// turning the close into an opposite position.
+_ = try position.adjustTaker(.{
+    .position_id = position.position_id,
+    .margin_delta = 0, // zero: the residual equity is paid out on close
+    .perp_delta = -perp_delta,
+    .amt1_limit = min_usd_out,
+    .reduce_only = true,
+});
+```
+
+Payouts go through the market's withdrawal controller. It pays instantly while its rate limit has room; otherwise the USDC is escrowed as a claim that anyone can release once the challenge window has passed:
+
+```zig
+const controller = try ctx.getWithdrawalController(perp);
+if (try sdk.withdrawal_controller.claimIdFromReceipt(&ctx, controller, tx_hash, my_address)) |claim_id| {
+    // ...after the challenge window:
+    _ = try sdk.withdrawal_controller.release(&ctx, controller, claim_id);
+}
 ```
 
 ## Architecture
@@ -88,12 +128,12 @@ HFT infrastructure (no dependencies):
 
 Contract interaction (requires eth.zig):
   chain_client (ChainClient seam + EthChainClient), context,
-  perp_contract, perp_factory, approve
+  perp_contract, perp_factory, withdrawal_controller, approve
 
 ABI definitions:
-  perp_abi, perp_factory_abi, module_registry_abi, protocol_fee_manager_abi,
-  fees_abi, margin_ratios_abi, funding_abi, pricing_abi, price_impact_abi,
-  beacon_abi, erc20_abi
+  perp_abi, perp_factory_abi, withdrawal_controller_abi, module_registry_abi,
+  protocol_fee_manager_abi, fees_abi, margin_ratios_abi, funding_abi,
+  pricing_abi, price_impact_abi, beacon_abi, erc20_abi
 ```
 
 The pure math and HFT infrastructure layers have zero external dependencies and can be used standalone for off-chain calculations (mark price conversions, PnL estimation, liquidation checks) and trading infrastructure (nonce management, gas caching, latency tracking).
@@ -109,11 +149,13 @@ zig build
 ### Test
 
 ```bash
-# Unit tests (pure math + HFT infrastructure, no network)
+# Unit + contract-layer tests (in-memory mock chain, no network)
 zig build test
 
-# Integration tests (requires Anvil running locally)
-anvil &
+# Integration tests: the harness starts its own Anvil node on port 8546 and
+# deploys the mocks, so build them first. Skips if anvil or the artifacts are
+# missing.
+(cd tests/contracts && forge build)
 zig build integration-test
 ```
 

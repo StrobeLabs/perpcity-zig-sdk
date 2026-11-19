@@ -2,7 +2,7 @@ const eth = @import("eth");
 const Function = eth.abi_types.Function;
 const keccak = eth.keccak;
 
-// IMarginRatios v0.1.0 surface (perpcity-contracts).
+// IMarginRatios v1.0.0 surface (perpcity-contracts).
 // Both functions return (init, liq, backstop) scaled by 1e6.
 
 pub const maker_margin_ratios: Function = .{

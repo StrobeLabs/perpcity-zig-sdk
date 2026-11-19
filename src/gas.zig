@@ -1,17 +1,45 @@
 const std = @import("std");
 
-/// Pre-computed gas limits for PerpCity contract calls.
+/// Pre-computed gas limits for PerpCity contract calls, so a hot path can
+/// skip `eth_estimateGas`.
 ///
-/// Avoids calling `estimateGas` on every transaction by using known gas
-/// limits with a safety margin baked in.  These values are empirically
-/// derived from Base L2 mainnet observations and include ~20% headroom.
+/// Sized from the perpcity-contracts v1.0.0 gas benchmarks
+/// (`benchmark/results/{taker,maker}.md` at that tag), which measure execution
+/// gas on a live-like book. Each limit covers the worst benchmarked case for
+/// its call with headroom on top, because two costs sit outside the benchmark:
+///
+/// - A swap pays for every initialized tick it crosses and for every
+///   initialized tick inside the price band, so a large trade on a market with
+///   many maker ranges costs more than a small one (the benchmark's
+///   16-extra-ticks open is about twice its plain open).
+/// - On Arbitrum the gas a transaction uses includes a component for posting
+///   its calldata to L1, which moves with the L1 base fee.
+///
+/// Unused gas is not charged, so the limits err high. They are still estimates:
+/// when a transaction must not fail, preflight it with the `simulate*` wrappers
+/// or estimate it.
 pub const GasLimits = struct {
     pub const APPROVE: u64 = 60_000;
-    pub const OPEN_TAKER_POS: u64 = 500_000;
-    pub const OPEN_MAKER_POS: u64 = 600_000;
-    pub const CLOSE_POSITION: u64 = 400_000;
-    pub const ADJUST_NOTIONAL: u64 = 350_000;
-    pub const ADJUST_MARGIN: u64 = 250_000;
+    /// `openTaker`. Benchmarked 455k-554k typical, 1.07M with a busy band.
+    pub const OPEN_TAKER_POS: u64 = 1_300_000;
+    /// `openMaker`. Benchmarked 487k-786k typical, 1.14M with a busy band.
+    pub const OPEN_MAKER_POS: u64 = 1_400_000;
+    /// A full close or side flip through `adjustTaker`, or removing all of a
+    /// maker's liquidity through `adjustMaker`. Benchmarked up to 509k.
+    pub const CLOSE_POSITION: u64 = 1_200_000;
+    /// `adjustTaker` with a nonzero `perp_delta`, or `adjustMaker` with a
+    /// nonzero `liquidity_delta`. Benchmarked up to 500k.
+    pub const ADJUST_NOTIONAL: u64 = 1_200_000;
+    /// `adjustTaker` / `adjustMaker` changing margin only (no pool action).
+    /// Benchmarked up to 431k.
+    pub const ADJUST_MARGIN: u64 = 550_000;
+    /// `moveMaker`. Not benchmarked at v1.0.0; sized as a range removal plus
+    /// an `openMaker`-style addition.
+    pub const MOVE_MAKER: u64 = 1_600_000;
+    /// `liquidateTaker` / `liquidateMaker`. Benchmarked up to 526k.
+    pub const LIQUIDATE: u64 = 1_200_000;
+    /// `backstopTaker` / `backstopMaker` (no pool action). Benchmarked up to 324k.
+    pub const BACKSTOP: u64 = 450_000;
 };
 
 /// Cached EIP-1559 gas fee parameters.
@@ -25,7 +53,7 @@ pub const GasFees = struct {
 /// Configuration for creating a `GasCache`.
 pub const GasCacheConfig = struct {
     /// Time-to-live in milliseconds for cached gas fees.
-    /// Default is 2000ms (one Base L2 block).
+    /// Default is 2000ms.
     ttl_ms: i64 = 2000,
     /// Default priority fee (tip) in wei.  1 gwei by default.
     default_priority_fee: u64 = 1_000_000_000,
@@ -203,11 +231,11 @@ test "GasLimits constants are reasonable" {
     try std.testing.expect(GasLimits.OPEN_MAKER_POS > GasLimits.OPEN_TAKER_POS);
     try std.testing.expect(GasLimits.CLOSE_POSITION > GasLimits.ADJUST_MARGIN);
     try std.testing.expectEqual(@as(u64, 60_000), GasLimits.APPROVE);
-    try std.testing.expectEqual(@as(u64, 500_000), GasLimits.OPEN_TAKER_POS);
-    try std.testing.expectEqual(@as(u64, 600_000), GasLimits.OPEN_MAKER_POS);
-    try std.testing.expectEqual(@as(u64, 400_000), GasLimits.CLOSE_POSITION);
-    try std.testing.expectEqual(@as(u64, 350_000), GasLimits.ADJUST_NOTIONAL);
-    try std.testing.expectEqual(@as(u64, 250_000), GasLimits.ADJUST_MARGIN);
+    try std.testing.expectEqual(@as(u64, 1_300_000), GasLimits.OPEN_TAKER_POS);
+    try std.testing.expectEqual(@as(u64, 1_400_000), GasLimits.OPEN_MAKER_POS);
+    try std.testing.expectEqual(@as(u64, 1_200_000), GasLimits.CLOSE_POSITION);
+    try std.testing.expectEqual(@as(u64, 1_200_000), GasLimits.ADJUST_NOTIONAL);
+    try std.testing.expectEqual(@as(u64, 550_000), GasLimits.ADJUST_MARGIN);
 }
 
 test "GasCache init sets defaults" {

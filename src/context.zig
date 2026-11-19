@@ -17,6 +17,7 @@ const fees_abi = @import("abi/fees_abi.zig");
 const margin_ratios_abi = @import("abi/margin_ratios_abi.zig");
 const erc20_abi = @import("abi/erc20_abi.zig");
 const beacon_abi = @import("abi/beacon_abi.zig");
+const withdrawal_controller_abi = @import("abi/withdrawal_controller_abi.zig");
 
 const ChainClient = chain_client.ChainClient;
 const EthChainClient = chain_client.EthChainClient;
@@ -65,7 +66,8 @@ const ManagedWrites = struct {
     pipeline: tx_pipeline_mod.TxPipeline,
 };
 
-/// Main client context for interacting with the PerpCity v0.1.0 protocol.
+/// Main client context for interacting with the PerpCity protocol
+/// (perpcity-contracts v1.0.0).
 pub const PerpCityContext = struct {
     allocator: std.mem.Allocator,
     /// The chain interface every read/write goes through. In production this is
@@ -76,7 +78,7 @@ pub const PerpCityContext = struct {
     eth_client: ?*EthChainClient,
     deployments: types.PerpCityDeployments,
     /// Approval is tracked per-perp because each Perp market is a separate
-    /// ERC721 contract that holds the user's USDC allowance.
+    /// contract that pulls USDC from the user's allowance.
     approved_perps: std.AutoHashMap(types.Address, void),
     config_cache: std.AutoHashMap(types.Address, CacheEntry),
     state_cache: state_cache_mod.StateCache,
@@ -263,13 +265,13 @@ pub const PerpCityContext = struct {
         const fees_module = config_val.modules.fees;
         const mr_module = config_val.modules.margin_ratios;
 
-        // Collapse the five per-field reads into a single batched eth_call
-        // (one JSON-RPC round-trip) instead of issuing them sequentially. The
+        // Collapse the per-field reads into a single batched eth_call (one
+        // JSON-RPC round-trip) instead of issuing them sequentially. The
         // modules() read above is served from the config cache.
-        const cd_fees = try eth.abi_encode.encodeFunctionCall(self.allocator, fees_abi.fees_selector, &.{});
-        defer self.allocator.free(cd_fees);
         const cd_liq = try eth.abi_encode.encodeFunctionCall(self.allocator, fees_abi.liq_fee_selector, &.{});
         defer self.allocator.free(cd_liq);
+        const cd_max = try eth.abi_encode.encodeFunctionCall(self.allocator, fees_abi.max_swap_fee_selector, &.{});
+        defer self.allocator.free(cd_max);
         const cd_taker = try eth.abi_encode.encodeFunctionCall(self.allocator, margin_ratios_abi.taker_margin_ratios_selector, &.{});
         defer self.allocator.free(cd_taker);
         const cd_maker = try eth.abi_encode.encodeFunctionCall(self.allocator, margin_ratios_abi.maker_margin_ratios_selector, &.{});
@@ -278,8 +280,8 @@ pub const PerpCityContext = struct {
         defer self.allocator.free(cd_pool);
 
         const calls = [_]ChainClient.BatchCall{
-            .{ .to = fees_module, .data = cd_fees },
             .{ .to = fees_module, .data = cd_liq },
+            .{ .to = fees_module, .data = cd_max },
             .{ .to = mr_module, .data = cd_taker },
             .{ .to = mr_module, .data = cd_maker },
             .{ .to = perp, .data = cd_pool },
@@ -294,26 +296,52 @@ pub const PerpCityContext = struct {
             if (!r.success) return error.BatchCallFailed;
         }
 
-        // fees(): (creator, insurance, lp) scaled by 1e6.
-        const fees_vals = try self.decodeBatch(results[0].bytes, &.{ .uint256, .uint256, .uint256 });
-        defer chain_client.freeReturnValues(fees_vals, self.allocator);
-        // liqFee(): single uint256.
-        const liq_vals = try self.decodeBatch(results[1].bytes, &.{.uint256});
+        // liqFee(): single uint24 scaled by 1e6.
+        const liq_vals = try self.decodeBatch(results[0].bytes, &.{.uint256});
         defer chain_client.freeReturnValues(liq_vals, self.allocator);
+        // maxSwapFee(): single uint256 scaled by 1e6.
+        const max_vals = try self.decodeBatch(results[1].bytes, &.{.uint256});
+        defer chain_client.freeReturnValues(max_vals, self.allocator);
         // takerMarginRatios() / makerMarginRatios(): (init, liq, backstop) scaled by 1e6.
         const taker_vals = try self.decodeBatch(results[2].bytes, &.{ .uint256, .uint256, .uint256 });
         defer chain_client.freeReturnValues(taker_vals, self.allocator);
         const maker_vals = try self.decodeBatch(results[3].bytes, &.{ .uint256, .uint256, .uint256 });
         defer chain_client.freeReturnValues(maker_vals, self.allocator);
-        // poolState(): (int256, uint256 sqrtPriceX96, uint256, uint256).
+        // poolState(): (int24 tick, uint160 sqrtPrice, uint256 ammPrice, uint128 liquidity).
         const pool_vals = try self.decodeBatch(results[4].bytes, &.{ .int256, .uint256, .uint256, .uint256 });
         defer chain_client.freeReturnValues(pool_vals, self.allocator);
+
+        // The swap-fee rates depend on the pool state read above, so they take
+        // a second round-trip. The module prices the LP fee from the active
+        // liquidity and the spot-vs-EMA gap of the AMM price; the EMAs are not
+        // exposed by a view, so the spot stands in for its own EMA and the
+        // result is the LP fee with no volatility surcharge.
+        const amm_price = std.math.cast(u128, pool_vals[2].uint256) orelse return error.AmmPriceOutOfRange;
+        const liquidity = std.math.cast(u128, pool_vals[3].uint256) orelse return error.LiquidityOutOfRange;
+        const spot_pair = [_]eth.abi_encode.AbiValue{
+            .{ .uint256 = @as(u256, amm_price) },
+            .{ .uint256 = @as(u256, amm_price) },
+        };
+        const fees_vals = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            fees_module,
+            fees_abi.fees_selector,
+            &.{
+                .{ .uint256 = @as(u256, liquidity) },
+                .{ .tuple = &spot_pair },
+                .{ .tuple = &spot_pair },
+            },
+            &.{ .uint256, .uint256, .uint256 },
+        );
+        defer chain_client.freeReturnValues(fees_vals, self.allocator);
 
         const fee_summary = types.Fees{
             .creator_fee = uintToRatio(fees_vals[0].uint256),
             .insurance_fee = uintToRatio(fees_vals[1].uint256),
             .lp_fee = uintToRatio(fees_vals[2].uint256),
             .liquidation_fee = uintToRatio(liq_vals[0].uint256),
+            .max_swap_fee = uintToRatio(max_vals[0].uint256),
         };
         const taker_bounds = boundsFromRatios(taker_vals[0].uint256, taker_vals[1].uint256, taker_vals[2].uint256);
         const maker_bounds = boundsFromRatios(maker_vals[0].uint256, maker_vals[1].uint256, maker_vals[2].uint256);
@@ -358,8 +386,6 @@ pub const PerpCityContext = struct {
                 .live_details = .{
                     .margin = @as(f64, @floatFromInt(raw.margin)) / constants.F64_1E6,
                     .perp_delta = raw.delta,
-                    .liq_margin_ratio = raw.liq_margin_ratio,
-                    .backstop_margin_ratio = raw.backstop_margin_ratio,
                 },
             });
         }
@@ -378,16 +404,17 @@ pub const PerpCityContext = struct {
         perp: types.Address,
         pos_id: u256,
     ) !types.PositionRawData {
-        // Output tuple mirrors `Perp.positions(uint256)` v0.1.0:
-        //   (BalanceDelta delta, uint128 margin, uint24 liqMarginRatio,
-        //    uint24 backstopMarginRatio, int256 lastCumlFundingX96).
+        // Output tuple mirrors `struct Position`:
+        //   (BalanceDelta delta, uint128 margin, int256 lastCumlFundingX96).
+        // These are the stored, unsettled balances; an inactive id reads as
+        // zeros. Use `getPositionPreview` for settled equity and risk flags.
         const result = try chain_client.readContract(
             &self.client,
             self.allocator,
             perp,
             perp_abi.positions_selector,
             &.{.{ .uint256 = pos_id }},
-            &.{ .int256, .uint128, .uint24, .uint24, .int256 },
+            &.{ .int256, .uint128, .int256 },
         );
         defer chain_client.freeReturnValues(result, self.allocator);
 
@@ -396,9 +423,7 @@ pub const PerpCityContext = struct {
             .position_id = pos_id,
             .delta = result[0].int256,
             .margin = @intCast(result[1].uint256),
-            .liq_margin_ratio = @intCast(result[2].uint256),
-            .backstop_margin_ratio = @intCast(result[3].uint256),
-            .last_cuml_funding_x96 = result[4].int256,
+            .last_cuml_funding_x96 = result[2].int256,
         };
     }
 
@@ -434,23 +459,35 @@ pub const PerpCityContext = struct {
         };
     }
 
-    /// Current funding rate for a perp. Decodes the full `Rates` tuple
-    /// (int88 fundingPerDay, uint64 longUtilFeePerDay, uint64 shortUtilFeePerDay,
-    /// uint40 lastTouch) but only surfaces the funding component. `fundingPerDay`
-    /// is signed and scaled by 1e18 per day; the returned percentages mirror the
-    /// TypeScript SDK `getFundingRate`.
-    pub fn getFundingRate(self: *Self, perp: types.Address) !types.FundingRate {
+    /// The market's cached rate state from `Perp.rates`: the daily funding and
+    /// utilization rates (scaled by 1e18 per day), the timestamp they began
+    /// applying, and the Q96 mark cached at that touch.
+    pub fn getRates(self: *Self, perp: types.Address) !types.Rates {
         const result = try chain_client.readContract(
             &self.client,
             self.allocator,
             perp,
             perp_abi.rates_selector,
             &.{},
-            &.{ .int88, .uint64, .uint64, .uint40 },
+            &.{ .int88, .uint64, .uint64, .uint40, .uint256 },
         );
         defer chain_client.freeReturnValues(result, self.allocator);
 
-        const raw: i256 = result[0].int256;
+        return types.Rates{
+            .funding_per_day = result[0].int256,
+            .long_util_fee_per_day = @intCast(result[1].uint256),
+            .short_util_fee_per_day = @intCast(result[2].uint256),
+            .last_touch = @intCast(result[3].uint256),
+            .last_mark = result[4].uint256,
+        };
+    }
+
+    /// Current funding rate for a perp, from `Rates.fundingPerDay` (signed,
+    /// scaled by 1e18 per day). The returned percentages mirror the TypeScript
+    /// SDK `getFundingRate`.
+    pub fn getFundingRate(self: *Self, perp: types.Address) !types.FundingRate {
+        const r = try self.getRates(perp);
+        const raw: i256 = r.funding_per_day;
         // Convert via i128 to avoid the LLVM aarch64 i256->f64 crash. int88 fits
         // comfortably in i128.
         const raw_128: i128 = @intCast(raw);
@@ -463,9 +500,8 @@ pub const PerpCityContext = struct {
         };
     }
 
-    /// Maker position detail from `Perp.makerDetails(posId)`. The `Maker` struct
-    /// is fully static, so decoding its leading `(int24, int24, uint128)` reads
-    /// the tick range and liquidity regardless of the trailing checkpoint fields.
+    /// Maker position detail from `Perp.makerDetails(posId)`: the stored range,
+    /// liquidity, and settlement checkpoints (`struct Maker`, fully static).
     pub fn getMakerDetails(self: *Self, perp: types.Address, pos_id: u256) !types.MakerDetails {
         const result = try chain_client.readContract(
             &self.client,
@@ -473,7 +509,7 @@ pub const PerpCityContext = struct {
             perp,
             perp_abi.maker_details_selector,
             &.{.{ .uint256 = pos_id }},
-            &.{ .int24, .int24, .uint128 },
+            &.{ .int24, .int24, .uint128, .uint256, .int256, .int256, .int256 },
         );
         defer chain_client.freeReturnValues(result, self.allocator);
 
@@ -483,11 +519,17 @@ pub const PerpCityContext = struct {
             .tick_lower = @intCast(result[0].int256),
             .tick_upper = @intCast(result[1].int256),
             .liquidity = @intCast(result[2].uint256),
+            .last_lp_fee_growth_inside_x128 = result[3].uint256,
+            .last_cuml_funding = .{
+                .below_x96 = result[4].int256,
+                .within_inventory_x192 = result[5].int256,
+            },
+            .last_funding_correction_x128 = result[6].int256,
         };
     }
 
     /// Taker position detail from `Perp.takerDetails(posId)`: the two X96
-    /// utilization-fee payment checkpoints.
+    /// utilization checkpoints for the position's side.
     pub fn getTakerDetails(self: *Self, perp: types.Address, pos_id: u256) !types.TakerDetails {
         const result = try chain_client.readContract(
             &self.client,
@@ -502,25 +544,25 @@ pub const PerpCityContext = struct {
         return types.TakerDetails{
             .perp = perp,
             .position_id = pos_id,
-            .last_long_util_payments_x96 = result[0].uint256,
-            .last_short_util_payments_x96 = result[1].uint256,
+            .last_util_payments_x96 = result[0].uint256,
+            .last_reserve_util_payments_x96 = result[1].uint256,
         };
     }
 
-    /// Owner of position NFT `pos_id` (ERC721 `Perp.ownerOf(id)`).
+    /// Recorded owner of position `pos_id` (`Perp.positionOwner(posId)`).
     ///
-    /// Positions are ERC721 tokens; a live position resolves to its owner's
-    /// address. `ownerOf` reverts for an id that was never minted or has been
-    /// burned (a closed or liquidated position), which surfaces here as an
-    /// error from the underlying call - a successful return therefore means the
-    /// position is still open. Pair with `pollEvents` to enumerate candidate
-    /// ids (the Perp is not ERC721Enumerable, so there is no on-chain listing).
+    /// Positions are not tokens: each has one recorded owner, which changes
+    /// only through a backstop. The call does not revert - it returns the zero
+    /// address for an id that was never opened or has been closed or fully
+    /// liquidated, so compare against `types.ZERO_ADDRESS` to test liveness.
+    /// There is no on-chain listing of a wallet's positions; enumerate
+    /// candidate ids with `pollEvents` (see `discoverOwnedPositions`).
     pub fn getPositionOwner(self: *Self, perp: types.Address, pos_id: u256) !types.Address {
         const result = try chain_client.readContract(
             &self.client,
             self.allocator,
             perp,
-            perp_abi.owner_of_selector,
+            perp_abi.position_owner_selector,
             &.{.{ .uint256 = pos_id }},
             &.{.address},
         );
@@ -528,21 +570,112 @@ pub const PerpCityContext = struct {
         return result[0].address;
     }
 
-    /// Number of open positions held by `owner` (ERC721 `Perp.balanceOf(owner)`).
+    /// The contract's settled view of a position (`Perp.previewPosition`):
+    /// margin after pending funding and fees, value and PnL at the current
+    /// mark, and the liquidatable / backstoppable flags, all accrued to the
+    /// current block without a transaction. Reverts `PositionDoesNotExist` for
+    /// an inactive id, which surfaces here as an error.
     ///
-    /// Returns the count only; the Perp is not ERC721Enumerable, so the
-    /// individual position ids must be discovered via events (`pollEvents`).
-    pub fn getPositionBalance(self: *Self, perp: types.Address, owner: types.Address) !u256 {
+    /// Prefer this to recomputing health off-chain. The flags report
+    /// eligibility only: a liquidation can still revert on physical capacity
+    /// or price impact.
+    pub fn getPositionPreview(self: *Self, perp: types.Address, pos_id: u256) !types.PositionPreview {
         const result = try chain_client.readContract(
             &self.client,
             self.allocator,
             perp,
-            perp_abi.balance_of_selector,
-            &.{.{ .address = owner }},
-            &.{.uint256},
+            perp_abi.preview_position_selector,
+            &.{.{ .uint256 = pos_id }},
+            &.{
+                .bool,    .uint256, .int256,  .uint256, .int256,
+                .uint256, .uint256, .uint256, .int256,  .int256,
+                .bool,    .bool,    .bool,    .uint256, .uint256,
+            },
         );
         defer chain_client.freeReturnValues(result, self.allocator);
-        return result[0].uint256;
+
+        return types.PositionPreview{
+            .perp = perp,
+            .position_id = pos_id,
+            .is_maker = result[0].boolean,
+            .mark_price = result[1].uint256,
+            .settled_margin = result[2].int256,
+            .pending_lp_fees = result[3].uint256,
+            .pending_funding = result[4].int256,
+            .pending_util = result[5].uint256,
+            .pending_reserve_util = result[6].uint256,
+            .value = result[7].uint256,
+            .unrealized_pnl = result[8].int256,
+            .equity = result[9].int256,
+            .meets_initial_margin = result[10].boolean,
+            .liquidatable = result[11].boolean,
+            .backstoppable = result[12].boolean,
+            .nominal_liq_fee = result[13].uint256,
+            .payable_liq_fee = result[14].uint256,
+        };
+    }
+
+    /// Full-book closing depth from `Perp.physicalCloseCapacity`, in perp
+    /// atoms. Open interest on each side must stay within it, so this (not
+    /// `getCapacity`) bounds how much new exposure a market can admit.
+    pub fn getPhysicalCloseCapacity(self: *Self, perp: types.Address) !types.PhysicalCloseCapacity {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.physical_close_capacity_selector,
+            &.{},
+            &.{ .uint128, .uint128 },
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+        return .{
+            .long_close = @intCast(result[0].uint256),
+            .short_close = @intCast(result[1].uint256),
+        };
+    }
+
+    /// Accounted TVL and its cap (`Perp.accountedTvl` / `Perp.tvlCap`), read
+    /// in one batched round-trip. Fresh USDC ingress above the cap reverts.
+    pub fn getTvlState(self: *Self, perp: types.Address) !types.TvlState {
+        const cd_tvl = try eth.abi_encode.encodeFunctionCall(self.allocator, perp_abi.accounted_tvl_selector, &.{});
+        defer self.allocator.free(cd_tvl);
+        const cd_cap = try eth.abi_encode.encodeFunctionCall(self.allocator, perp_abi.tvl_cap_selector, &.{});
+        defer self.allocator.free(cd_cap);
+
+        const calls = [_]ChainClient.BatchCall{
+            .{ .to = perp, .data = cd_tvl },
+            .{ .to = perp, .data = cd_cap },
+        };
+        const results = try self.client.callBatch(self.allocator, &calls);
+        defer chain_client.freeBatchResults(results, self.allocator);
+        for (results) |r| {
+            if (!r.success) return error.BatchCallFailed;
+        }
+
+        const tvl_vals = try self.decodeBatch(results[0].bytes, &.{.uint256});
+        defer chain_client.freeReturnValues(tvl_vals, self.allocator);
+        const cap_vals = try self.decodeBatch(results[1].bytes, &.{.uint256});
+        defer chain_client.freeReturnValues(cap_vals, self.allocator);
+
+        return .{ .tvl = tvl_vals[0].uint256, .cap = cap_vals[0].uint256 };
+    }
+
+    /// The market's accounted-payout controller (`Perp.withdrawalController`).
+    /// Withdrawals, close payouts, and liquidation fees are routed through it:
+    /// paid instantly while its rate limit has room, otherwise escrowed as a
+    /// claim (see `withdrawal_controller.zig`). The zero address means payouts
+    /// are sent directly.
+    pub fn getWithdrawalController(self: *Self, perp: types.Address) !types.Address {
+        const result = try chain_client.readContract(
+            &self.client,
+            self.allocator,
+            perp,
+            perp_abi.withdrawal_controller_selector,
+            &.{},
+            &.{.address},
+        );
+        defer chain_client.freeReturnValues(result, self.allocator);
+        return result[0].address;
     }
 
     /// Market solvency state from `Perp.solvencyState`: (uint128 badDebt,
@@ -586,19 +719,31 @@ pub const PerpCityContext = struct {
         };
     }
 
-    /// Current index value of a beacon (`IBeacon.index()`), a single uint256.
-    /// Matches the TypeScript SDK `getIndexValue`.
-    pub fn getIndexValue(self: *Self, beacon: types.Address) !u256 {
+    /// Latest observation of a beacon (`IBeacon.index()`): the Q96 index and
+    /// the block timestamp at which it was written. A market rejects an
+    /// observation older than its `latency`, so check `updated_at` before
+    /// relying on a trade landing.
+    pub fn getIndexObservation(self: *Self, beacon: types.Address) !types.IndexObservation {
         const result = try chain_client.readContract(
             &self.client,
             self.allocator,
             beacon,
             beacon_abi.index_selector,
             &.{},
-            &.{.uint256},
+            &.{ .uint256, .uint256 },
         );
         defer chain_client.freeReturnValues(result, self.allocator);
-        return result[0].uint256;
+        return .{
+            .index = result[0].uint256,
+            .updated_at = std.math.cast(u64, result[1].uint256) orelse return error.TimestampOutOfRange,
+        };
+    }
+
+    /// Current index value of a beacon, the first word of `IBeacon.index()`.
+    /// Matches the TypeScript SDK `getIndexValue`. Use `getIndexObservation`
+    /// when the observation's age matters.
+    pub fn getIndexValue(self: *Self, beacon: types.Address) !u256 {
+        return (try self.getIndexObservation(beacon)).index;
     }
 
     /// Time-weighted average index of a beacon over `seconds_ago`
@@ -665,20 +810,23 @@ pub const PerpCityContext = struct {
 
     /// Discover the position ids currently owned by `owner` in market `perp`.
     ///
-    /// The Perp mints positions as Solady ERC721 tokens and is NOT
-    /// `ERC721Enumerable`, so there is no on-chain way to list a wallet's
-    /// positions. This scans `perp`'s position events over the inclusive block
-    /// range `[from_block, to_block]` for every id that appears (opens, adjusts,
-    /// closes, backstops, conversions), then confirms each in a single batched
-    /// `ownerOf` call. An id is returned iff its token is still live (ownerOf did
-    /// not revert) AND currently owned by `owner`; closed/liquidated positions
-    /// (ownerOf reverts) and positions transferred away are naturally excluded,
-    /// so the event lifecycle semantics never need to be modelled here.
+    /// The Perp keeps one recorded owner per position id and offers no on-chain
+    /// way to list a wallet's positions. This scans `perp`'s position events
+    /// over the inclusive block range `[from_block, to_block]` for every id that
+    /// appears (opens, adjusts, closes, backstops, conversions, liquidations),
+    /// then confirms each in a single batched `positionOwner` call. An id is
+    /// returned iff it is currently owned by `owner`; closed and fully
+    /// liquidated positions (owner cleared to zero) and positions reassigned by
+    /// a backstop are naturally excluded, so the event lifecycle semantics
+    /// never need to be modelled here. A zero `owner` matches nothing.
     ///
     /// Ownership: the caller owns the returned slice and frees it with
     /// `allocator.free`. The ids are returned in first-seen event order. For a
     /// large block span, chunk the range as described on `pollEvents` and union
     /// the results.
+    ///
+    /// Errors `BatchCallFailed` if any ownership read fails, rather than
+    /// returning a list that silently omits that position.
     pub fn discoverOwnedPositions(
         self: *Self,
         perp: types.Address,
@@ -686,6 +834,10 @@ pub const PerpCityContext = struct {
         from_block: u64,
         to_block: u64,
     ) ![]u256 {
+        // A cleared position reads back the zero address, so matching on it
+        // would return every closed id rather than anything owned.
+        if (std.mem.eql(u8, &owner, &types.ZERO_ADDRESS)) return self.allocator.alloc(u256, 0);
+
         const evs = try self.pollEvents(perp, from_block, to_block);
         defer self.allocator.free(evs);
 
@@ -701,7 +853,7 @@ pub const PerpCityContext = struct {
         }
         if (candidates.items.len == 0) return self.allocator.alloc(u256, 0);
 
-        // Batch ownerOf(id) for every candidate into one round-trip. Each call's
+        // Batch positionOwner(id) for every candidate into one round-trip. Each call's
         // encoded calldata is owned here and freed after the batch resolves. A
         // single cleanup frees exactly the entries built so far (whether the
         // encode loop completed or errored partway), so there is no double-free
@@ -715,7 +867,7 @@ pub const PerpCityContext = struct {
         for (candidates.items, 0..) |id, i| {
             const cd = try eth.abi_encode.encodeFunctionCall(
                 self.allocator,
-                perp_abi.owner_of_selector,
+                perp_abi.position_owner_selector,
                 &.{.{ .uint256 = id }},
             );
             calls[i] = .{ .to = perp, .data = cd };
@@ -728,10 +880,12 @@ pub const PerpCityContext = struct {
         var owned: std.ArrayList(u256) = .empty;
         defer owned.deinit(self.allocator);
         for (results, candidates.items) |r, id| {
-            // A reverted ownerOf (success=false) means the position is closed or
-            // never existed; skip it rather than decoding zero bytes.
-            if (!r.success) continue;
-            const vals = eth.abi_decode.decodeValues(r.bytes, &.{.address}, self.allocator) catch continue;
+            // positionOwner is a mapping getter that never reverts (an inactive
+            // id reads as the zero address), so a failed entry is a node or
+            // contract fault. Surface it: skipping the id would return a short
+            // list that looks like a complete one.
+            if (!r.success) return error.BatchCallFailed;
+            const vals = try eth.abi_decode.decodeValues(r.bytes, &.{.address}, self.allocator);
             defer chain_client.freeReturnValues(vals, self.allocator);
             if (std.mem.eql(u8, &vals[0].address, &owner)) try owned.append(self.allocator, id);
         }
@@ -952,8 +1106,8 @@ pub const PerpCityContext = struct {
 };
 
 /// Identifier for a position in `getUserData`. `is_maker` is supplied by the
-/// caller because v0.1.0 stores it implicitly in `Perp.makers` / `Perp.takers`
-/// rather than on the Position struct.
+/// caller because the contract stores it implicitly (nonzero maker liquidity)
+/// rather than on the Position struct; `getPositionPreview` reports it.
 pub const PerpPositionId = struct {
     perp: types.Address,
     position_id: u256,

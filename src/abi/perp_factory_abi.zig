@@ -4,8 +4,9 @@ const Event = eth.abi_types.Event;
 const AbiParam = eth.abi_types.AbiParam;
 const keccak = eth.keccak;
 
-// Modules tuple matches `struct Modules` in perpcity-contracts v0.1.0
-// SharedStructs.sol: { beacon, fees, funding, marginRatios, priceImpact, pricing }.
+// IPerpFactory surface of perpcity-contracts v1.0.0.
+
+// `struct Modules`: { beacon, fees, funding, marginRatios, priceImpact, pricing }.
 const modules_components = [_]AbiParam{
     .{ .name = "beacon", .abi_type = .address },
     .{ .name = "fees", .abi_type = .address },
@@ -15,53 +16,57 @@ const modules_components = [_]AbiParam{
     .{ .name = "pricing", .abi_type = .address },
 };
 
+// `struct WithdrawalConfig`: { capacity, refillPerSecond, challengeWindow }.
+const withdrawal_config_components = [_]AbiParam{
+    .{ .name = "capacity", .abi_type = .uint128 },
+    .{ .name = "refillPerSecond", .abi_type = .uint128 },
+    .{ .name = "challengeWindow", .abi_type = .uint48 },
+};
+
 pub const create_perp: Function = .{
     .name = "createPerp",
     .state_mutability = .nonpayable,
     .inputs = &.{
         .{ .name = "owner", .abi_type = .address },
-        .{ .name = "name", .abi_type = .string },
-        .{ .name = "symbol", .abi_type = .string },
-        .{ .name = "tokenUri", .abi_type = .string },
+        .{ .name = "governor", .abi_type = .address },
         .{ .name = "modules", .abi_type = .tuple, .components = &modules_components },
         .{ .name = "emaWindow", .abi_type = .uint24 },
+        .{ .name = "latency", .abi_type = .uint32 },
         .{ .name = "salt", .abi_type = .bytes32 },
+        .{ .name = "withdrawalConfig", .abi_type = .tuple, .components = &withdrawal_config_components },
     },
     .outputs = &.{
         .{ .name = "perp", .abi_type = .address },
     },
 };
 pub const create_perp_selector = keccak.selector(
-    "createPerp(address,string,string,string,(address,address,address,address,address,address),uint24,bytes32)",
+    "createPerp(address,address,(address,address,address,address,address,address),uint24,uint32,bytes32,(uint128,uint128,uint48))",
 );
 
-pub const perps: Function = .{
-    .name = "perps",
+/// The Perp implementation that newly created market proxies point at.
+pub const perp_implementation: Function = .{
+    .name = "perpImplementation",
     .state_mutability = .view,
-    .inputs = &.{
-        .{ .name = "perp", .abi_type = .address },
-    },
+    .inputs = &.{},
     .outputs = &.{
-        .{ .name = "", .abi_type = .bool },
+        .{ .name = "", .abi_type = .address },
     },
 };
-pub const perps_selector = keccak.selector("perps(address)");
+pub const perp_implementation_selector = keccak.selector("perpImplementation()");
 
-// Event PerpCreated(
+// event PerpCreated(
 //     address perp,
-//     PoolId poolId,           // bytes32 (typedef of bytes32)
+//     PoolId poolId,           // bytes32
 //     Modules modules,         // tuple (address x6)
 //     uint256 initialIndex,
 //     uint24 emaWindow,
+//     uint32 latency,
 //     uint256 protocolFee,
 //     uint160 sqrtPriceX96,
 //     int24 tick,
-//     address owner,
-//     string name,
-//     string symbol,
-//     string tokenUri
+//     address owner
 // );
-// None of the params are indexed at v0.1.0.
+// None of the params are indexed.
 pub const perp_created_event: Event = .{
     .name = "PerpCreated",
     .inputs = &.{
@@ -70,18 +75,16 @@ pub const perp_created_event: Event = .{
         .{ .name = "modules", .abi_type = .tuple, .components = &modules_components },
         .{ .name = "initialIndex", .abi_type = .uint256 },
         .{ .name = "emaWindow", .abi_type = .uint24 },
+        .{ .name = "latency", .abi_type = .uint32 },
         .{ .name = "protocolFee", .abi_type = .uint256 },
         .{ .name = "sqrtPriceX96", .abi_type = .uint160 },
         .{ .name = "tick", .abi_type = .int24 },
         .{ .name = "owner", .abi_type = .address },
-        .{ .name = "name", .abi_type = .string },
-        .{ .name = "symbol", .abi_type = .string },
-        .{ .name = "tokenUri", .abi_type = .string },
     },
 };
 pub const perp_created_topic = blk: {
     @setEvalBranchQuota(50_000);
     break :blk keccak.hash(
-        "PerpCreated(address,bytes32,(address,address,address,address,address,address),uint256,uint24,uint256,uint160,int24,address,string,string,string)",
+        "PerpCreated(address,bytes32,(address,address,address,address,address,address),uint256,uint24,uint32,uint256,uint160,int24,address)",
     );
 };

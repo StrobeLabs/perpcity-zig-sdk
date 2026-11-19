@@ -21,6 +21,10 @@ contract MockProtocolFeeManager {
         emit ProtocolFeeSet(newProtocolFee);
     }
 
+    function owner() external view returns (address) {
+        return OWNER;
+    }
+
     function canCollectProtocolFees(address caller) external view returns (bool) {
         return caller == OWNER;
     }

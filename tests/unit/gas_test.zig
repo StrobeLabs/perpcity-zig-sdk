@@ -11,11 +11,26 @@ const Urgency = sdk.gas.Urgency;
 
 test "GasLimits - all constants have expected values" {
     try std.testing.expectEqual(@as(u64, 60_000), GasLimits.APPROVE);
-    try std.testing.expectEqual(@as(u64, 500_000), GasLimits.OPEN_TAKER_POS);
-    try std.testing.expectEqual(@as(u64, 600_000), GasLimits.OPEN_MAKER_POS);
-    try std.testing.expectEqual(@as(u64, 400_000), GasLimits.CLOSE_POSITION);
-    try std.testing.expectEqual(@as(u64, 350_000), GasLimits.ADJUST_NOTIONAL);
-    try std.testing.expectEqual(@as(u64, 250_000), GasLimits.ADJUST_MARGIN);
+    try std.testing.expectEqual(@as(u64, 1_300_000), GasLimits.OPEN_TAKER_POS);
+    try std.testing.expectEqual(@as(u64, 1_400_000), GasLimits.OPEN_MAKER_POS);
+    try std.testing.expectEqual(@as(u64, 1_200_000), GasLimits.CLOSE_POSITION);
+    try std.testing.expectEqual(@as(u64, 1_200_000), GasLimits.ADJUST_NOTIONAL);
+    try std.testing.expectEqual(@as(u64, 550_000), GasLimits.ADJUST_MARGIN);
+    try std.testing.expectEqual(@as(u64, 1_600_000), GasLimits.MOVE_MAKER);
+    try std.testing.expectEqual(@as(u64, 1_200_000), GasLimits.LIQUIDATE);
+    try std.testing.expectEqual(@as(u64, 450_000), GasLimits.BACKSTOP);
+}
+
+test "GasLimits clear the worst v1.0.0 benchmark for each call" {
+    // Highest execution gas per call in perpcity-contracts v1.0.0
+    // benchmark/results. A limit at or below its figure would run out of gas.
+    try std.testing.expect(GasLimits.OPEN_TAKER_POS > 1_068_686);
+    try std.testing.expect(GasLimits.OPEN_MAKER_POS > 1_136_332);
+    try std.testing.expect(GasLimits.CLOSE_POSITION > 509_408);
+    try std.testing.expect(GasLimits.ADJUST_NOTIONAL > 500_094);
+    try std.testing.expect(GasLimits.ADJUST_MARGIN > 431_358);
+    try std.testing.expect(GasLimits.LIQUIDATE > 525_530);
+    try std.testing.expect(GasLimits.BACKSTOP > 324_382);
 }
 
 test "GasLimits - ordering is reasonable" {

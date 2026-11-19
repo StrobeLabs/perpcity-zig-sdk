@@ -39,7 +39,7 @@ test "all topic hashes are distinct from each other" {
 test "topic hash matches runtime keccak256 of event signature" {
     var runtime_hash: [32]u8 = undefined;
     var hasher = std.crypto.hash.sha3.Keccak256.init(.{});
-    hasher.update("MakerOpened(uint256)");
+    hasher.update("MakerOpened(uint256,address,int24,int24,uint128,int256,int256,(int256,int256))");
     hasher.final(&runtime_hash);
     try std.testing.expectEqualSlices(u8, &runtime_hash, &Topics.MAKER_OPENED);
 }
@@ -47,7 +47,7 @@ test "topic hash matches runtime keccak256 of event signature" {
 test "TakerOpened topic matches runtime keccak256 of canonical signature" {
     var runtime_hash: [32]u8 = undefined;
     var hasher = std.crypto.hash.sha3.Keccak256.init(.{});
-    hasher.update("TakerOpened(uint256,(int256,uint256,int256,uint256,uint256,uint256,uint256))");
+    hasher.update("TakerOpened(uint256,address,uint128,(int256,uint256,int256,uint256,uint256,uint256,uint256,uint256),int256)");
     hasher.final(&runtime_hash);
     try std.testing.expectEqualSlices(u8, &runtime_hash, &Topics.TAKER_OPENED);
 }

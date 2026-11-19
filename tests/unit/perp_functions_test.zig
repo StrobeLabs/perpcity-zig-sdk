@@ -25,6 +25,7 @@ fn makeTestPerpData() types.PerpData {
             .insurance_fee = 0.001,
             .lp_fee = 0.003,
             .liquidation_fee = 0.01,
+            .max_swap_fee = 0.008,
         },
     };
 }

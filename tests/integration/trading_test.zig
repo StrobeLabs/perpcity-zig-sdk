@@ -3,24 +3,10 @@ const sdk = @import("perpcity_sdk");
 const types = sdk.types;
 
 // All tests in this module are placeholders. They skip via `error.SkipZigTest`
-// because they require a live Anvil node with the v0.1.0 mock stack deployed.
+// because they require a live Anvil node with the mock stack deployed.
 
 test "createPerp via factory returns a new perp address" {
-    // Drive the factory call end-to-end and check that the returned address
-    // appears as `true` in factory.perps(...).
-    //
-    //   var harness = try sdk.testing.setup.AnvilSetup.init(allocator, io);
-    //   defer harness.deinit();
-    //   const perp = try sdk.perp_factory.createPerp(&harness.context, .{
-    //       .owner = harness.deployerAddress(),
-    //       .name = "ETH-PERP",
-    //       .symbol = "ETHP",
-    //       .token_uri = "",
-    //       .modules = harness.defaultModules(),
-    //       .ema_window = 60,
-    //       .salt = types.ZERO_BYTES32,
-    //   });
-    //   try std.testing.expect(try sdk.perp_factory.isPerp(&harness.context, perp));
+    // Covered end-to-end by the v1.0.0 flow test in context_test.zig.
     return error.SkipZigTest;
 }
 
@@ -53,7 +39,7 @@ test "openTaker - rejects zero perp_delta" {
     return error.SkipZigTest;
 }
 
-test "openMaker - valid range mints a maker NFT" {
+test "openMaker - valid range opens a maker position" {
     // openMaker should succeed for a price range [price_lower, price_upper]
     // with positive liquidity. The returned OpenPosition.is_maker is true.
     return error.SkipZigTest;

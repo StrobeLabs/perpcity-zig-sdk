@@ -32,7 +32,7 @@ pub const PerpError = error{
 const OpenTakerCall = struct {
     to: types.Address,
     selector: [4]u8,
-    tuple: [4]AbiValue,
+    tuple: [6]AbiValue,
 };
 
 fn buildOpenTaker(
@@ -57,6 +57,8 @@ fn buildOpenTaker(
             .{ .uint256 = @as(u256, margin_scaled) },
             .{ .int256 = params.perp_delta },
             .{ .uint256 = params.amt1_limit },
+            .{ .uint256 = params.max_total_fee },
+            .{ .uint256 = @as(u256, params.deadline) },
         },
     };
 }
@@ -119,7 +121,7 @@ pub fn simulateOpenTaker(
 const OpenMakerCall = struct {
     to: types.Address,
     selector: [4]u8,
-    tuple: [7]AbiValue,
+    tuple: [8]AbiValue,
 };
 
 fn buildOpenMaker(
@@ -154,6 +156,7 @@ fn buildOpenMaker(
             .{ .uint256 = @as(u256, params.liquidity) },
             .{ .uint256 = params.max_amt0_in },
             .{ .uint256 = params.max_amt1_in },
+            .{ .uint256 = @as(u256, params.deadline) },
         },
     };
 }
@@ -212,7 +215,7 @@ pub fn simulateOpenMaker(
 const AdjustMakerCall = struct {
     to: types.Address,
     selector: [4]u8,
-    tuple: [5]AbiValue,
+    tuple: [6]AbiValue,
 };
 
 fn buildAdjustMaker(perp: types.Address, params: types.AdjustMakerParams) AdjustMakerCall {
@@ -225,6 +228,7 @@ fn buildAdjustMaker(perp: types.Address, params: types.AdjustMakerParams) Adjust
             .{ .int256 = @as(i256, params.liquidity_delta) },
             .{ .uint256 = params.amt0_limit },
             .{ .uint256 = params.amt1_limit },
+            .{ .uint256 = @as(u256, params.deadline) },
         },
     };
 }
@@ -268,7 +272,7 @@ pub fn simulateAdjustMaker(
 const AdjustTakerCall = struct {
     to: types.Address,
     selector: [4]u8,
-    tuple: [4]AbiValue,
+    tuple: [7]AbiValue,
 };
 
 fn buildAdjustTaker(perp: types.Address, params: types.AdjustTakerParams) AdjustTakerCall {
@@ -280,6 +284,9 @@ fn buildAdjustTaker(perp: types.Address, params: types.AdjustTakerParams) Adjust
             .{ .int256 = @as(i256, params.margin_delta) },
             .{ .int256 = params.perp_delta },
             .{ .uint256 = params.amt1_limit },
+            .{ .uint256 = params.max_total_fee },
+            .{ .boolean = params.reduce_only },
+            .{ .uint256 = @as(u256, params.deadline) },
         },
     };
 }
@@ -319,17 +326,86 @@ pub fn simulateAdjustTaker(
 }
 
 // ---------------------------------------------------------------------------
+// moveMaker
+// ---------------------------------------------------------------------------
+
+/// The `(to, selector, args)` for a `moveMaker` call, shared by the write path
+/// and the `simulate` preflight.
+const MoveMakerCall = struct {
+    to: types.Address,
+    selector: [4]u8,
+    tuple: [10]AbiValue,
+};
+
+fn buildMoveMaker(perp: types.Address, params: types.MoveMakerParams) MoveMakerCall {
+    return .{
+        .to = perp,
+        .selector = perp_abi.move_maker_selector,
+        .tuple = .{
+            .{ .uint256 = params.position_id },
+            .{ .int256 = @as(i256, params.tick_lower) },
+            .{ .int256 = @as(i256, params.tick_upper) },
+            .{ .uint256 = @as(u256, params.liquidity) },
+            .{ .uint256 = params.remove_amt0_min },
+            .{ .uint256 = params.remove_amt1_min },
+            .{ .uint256 = params.add_amt0_max },
+            .{ .uint256 = params.add_amt1_max },
+            .{ .int256 = @as(i256, params.margin_delta) },
+            .{ .uint256 = @as(u256, params.deadline) },
+        },
+    };
+}
+
+/// Atomically replace a maker position's range on the same position id: the
+/// old range is removed and the new one added in one call, with coverage
+/// checked on the final geometry. The caller must own the position.
+pub fn moveMaker(
+    ctx: *PerpCityContext,
+    perp: types.Address,
+    params: types.MoveMakerParams,
+) !types.Bytes32 {
+    const c = buildMoveMaker(perp, params);
+    return chain_client.writeContract(
+        &ctx.client,
+        ctx.allocator,
+        c.to,
+        c.selector,
+        &.{.{ .tuple = &c.tuple }},
+        0,
+    );
+}
+
+/// Opt-in revert preflight for `moveMaker`; see `simulateOpenTaker`.
+pub fn simulateMoveMaker(
+    ctx: *PerpCityContext,
+    perp: types.Address,
+    params: types.MoveMakerParams,
+) !void {
+    const c = buildMoveMaker(perp, params);
+    const from = try ctx.client.address();
+    return chain_client.simulateContract(
+        &ctx.client,
+        ctx.allocator,
+        c.to,
+        c.selector,
+        &.{.{ .tuple = &c.tuple }},
+        from,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // liquidate / backstop
 // ---------------------------------------------------------------------------
 
 /// The `(to, selector, args)` for a liquidate call. `liquidateMaker` and
-/// `liquidateTaker` share the 2-arg `(posId, feeRecipient)` shape and differ
-/// only by selector, so one builder serves both. Shared by the write path and
-/// the `simulate` preflight.
+/// `liquidateTaker` share the 3-arg `(posId, feeRecipient, amount)` shape -
+/// the amount is liquidity for a maker and absolute perp exposure for a taker -
+/// and differ only by selector, so one builder serves both. Shared by the
+/// write path and the `simulate` preflight.
 const LiquidateCall = struct {
     to: types.Address,
     selector: [4]u8,
-    args: [2]AbiValue,
+    args: [3]AbiValue,
 };
 
 fn buildLiquidate(perp: types.Address, selector: [4]u8, params: types.LiquidateParams) LiquidateCall {
@@ -339,10 +415,14 @@ fn buildLiquidate(perp: types.Address, selector: [4]u8, params: types.LiquidateP
         .args = .{
             .{ .uint256 = params.position_id },
             .{ .address = params.fee_recipient },
+            .{ .uint256 = @as(u256, params.amount) },
         },
     };
 }
 
+/// Liquidate `params.amount` of an unhealthy maker's liquidity. Permissionless.
+/// A partial liquidation must improve the position's health, else the call
+/// reverts `HealthNotImproved`.
 pub fn liquidateMaker(
     ctx: *PerpCityContext,
     perp: types.Address,
@@ -363,6 +443,9 @@ pub fn simulateLiquidateMaker(
     return chain_client.simulateContract(&ctx.client, ctx.allocator, c.to, c.selector, &c.args, from);
 }
 
+/// Liquidate `params.amount` perp atoms of an unhealthy taker's exposure.
+/// Permissionless. A partial liquidation must improve the position's health,
+/// else the call reverts `HealthNotImproved`.
 pub fn liquidateTaker(
     ctx: *PerpCityContext,
     perp: types.Address,
@@ -384,13 +467,13 @@ pub fn simulateLiquidateTaker(
 }
 
 /// The `(to, selector, args)` for a backstop call. `backstopMaker` and
-/// `backstopTaker` share the 3-arg `(posId, marginIn, positionRecipient)` shape
-/// and differ only by selector. Shared by the write path and the `simulate`
-/// preflight.
+/// `backstopTaker` share the 4-arg `(posId, marginIn, positionRecipient,
+/// deadline)` shape and differ only by selector. Shared by the write path and
+/// the `simulate` preflight.
 const BackstopCall = struct {
     to: types.Address,
     selector: [4]u8,
-    args: [3]AbiValue,
+    args: [4]AbiValue,
 };
 
 fn buildBackstop(perp: types.Address, selector: [4]u8, params: types.BackstopParams) BackstopCall {
@@ -401,6 +484,7 @@ fn buildBackstop(perp: types.Address, selector: [4]u8, params: types.BackstopPar
             .{ .uint256 = params.position_id },
             .{ .uint256 = @as(u256, params.margin_in) },
             .{ .address = params.position_recipient },
+            .{ .uint256 = @as(u256, params.deadline) },
         },
     };
 }
@@ -517,9 +601,10 @@ pub fn collectProtocolFees(
 // ---------------------------------------------------------------------------
 
 /// Scan a transaction receipt for an event with `expected_topic` emitted by
-/// `expected_emitter` and decode the position id from the first 32 bytes of
-/// its log `data`. Returns `EventDecodeFailed` if no matching log is found,
-/// or `TransactionReverted` if the receipt's status is not 1.
+/// `expected_emitter` and read the position id from `topics[1]` (`posId` is
+/// the first indexed parameter of `MakerOpened` / `TakerOpened`). Returns
+/// `EventDecodeFailed` if no matching log is found, or `TransactionReverted`
+/// if the receipt's status is not 1.
 fn decodePositionId(
     ctx: *PerpCityContext,
     tx_hash: types.Bytes32,
@@ -533,19 +618,10 @@ fn decodePositionId(
 
     for (receipt.logs) |log| {
         if (!std.mem.eql(u8, &log.address, &expected_emitter)) continue;
-        if (log.topics.len == 0) continue;
+        if (log.topics.len < 2) continue;
         if (!std.mem.eql(u8, &log.topics[0], &expected_topic)) continue;
-        if (log.data.len < 32) continue;
-        return u256FromBytes(log.data[0..32]);
+        return std.mem.readInt(u256, &log.topics[1], .big);
     }
 
     return PerpError.EventDecodeFailed;
-}
-
-fn u256FromBytes(buf: *const [32]u8) u256 {
-    var v: u256 = 0;
-    for (buf) |b| {
-        v = (v << 8) | @as(u256, b);
-    }
-    return v;
 }

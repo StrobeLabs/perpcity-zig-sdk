@@ -267,6 +267,7 @@ test "simulateLiquidateMaker returns normally when the write would not revert" {
     try perp_contract.simulateLiquidateMaker(&ctx, addr(0xBE), .{
         .position_id = 8080,
         .fee_recipient = addr(0x77),
+        .amount = 1_000,
     });
     try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
 }
@@ -283,6 +284,7 @@ test "simulateLiquidateMaker propagates the revert-preflight error" {
     try std.testing.expectError(NoMockResponse, perp_contract.simulateLiquidateMaker(&ctx, addr(0xBE), .{
         .position_id = 8080,
         .fee_recipient = addr(0x77),
+        .amount = 1_000,
     }));
     try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
 }
@@ -303,6 +305,7 @@ test "simulateLiquidateTaker returns normally when the write would not revert" {
     try perp_contract.simulateLiquidateTaker(&ctx, addr(0xBE), .{
         .position_id = 4242,
         .fee_recipient = addr(0x77),
+        .amount = 1_000,
     });
     try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
 }
@@ -319,6 +322,7 @@ test "simulateLiquidateTaker propagates the revert-preflight error" {
     try std.testing.expectError(NoMockResponse, perp_contract.simulateLiquidateTaker(&ctx, addr(0xBE), .{
         .position_id = 4242,
         .fee_recipient = addr(0x77),
+        .amount = 1_000,
     }));
     try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
 }
@@ -426,9 +430,7 @@ test "simulateApproveUsdcMax propagates the revert-preflight error" {
 fn testCreatePerpParams() types.CreatePerpParams {
     return .{
         .owner = addr(0x01),
-        .name = "Test Market",
-        .symbol = "TEST",
-        .token_uri = "ipfs://uri",
+        .governor = addr(0x02),
         .modules = .{
             .beacon = addr(0xB0),
             .fees = addr(0xB1),
@@ -438,6 +440,12 @@ fn testCreatePerpParams() types.CreatePerpParams {
             .pricing = addr(0xB5),
         },
         .ema_window = 3600,
+        .latency = 900,
+        .withdrawal_config = .{
+            .capacity = 50_000_000_000,
+            .refill_per_second = 1_000_000,
+            .challenge_window = 86_400,
+        },
     };
 }
 
@@ -462,5 +470,62 @@ test "simulateCreatePerp propagates the revert-preflight error" {
     defer ctx.deinit();
 
     try std.testing.expectError(NoMockResponse, perp_factory.simulateCreatePerp(&ctx, testCreatePerpParams()));
+    try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
+}
+
+// ---------------------------------------------------------------------------
+// simulateMoveMaker / simulateRelease
+// ---------------------------------------------------------------------------
+
+fn testMoveMakerParams() types.MoveMakerParams {
+    return .{
+        .position_id = 8,
+        .tick_lower = -600,
+        .tick_upper = 900,
+        .liquidity = 5_000,
+        .remove_amt0_min = 0,
+        .remove_amt1_min = 0,
+        .add_amt0_max = std.math.maxInt(u128),
+        .add_amt1_max = std.math.maxInt(u128),
+    };
+}
+
+test "simulateMoveMaker returns normally when the write would not revert" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    try mock.setResponse(perp_abi.move_maker_selector, &ok_return);
+
+    try perp_contract.simulateMoveMaker(&ctx, addr(0xBE), testMoveMakerParams());
+    try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
+    try std.testing.expectEqualSlices(u8, &mock.mock_addr, &mock.last_simulate_from.?);
+}
+
+test "simulateMoveMaker propagates the revert-preflight error" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    try std.testing.expectError(NoMockResponse, perp_contract.simulateMoveMaker(&ctx, addr(0xBE), testMoveMakerParams()));
+    try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
+}
+
+test "simulateRelease preflights the claim release without sending" {
+    const allocator = std.testing.allocator;
+    var mock = MockChainClient.init(allocator);
+    defer mock.deinit();
+    var ctx = PerpCityContext.initWithClient(allocator, mock.client(), testDeployments());
+    defer ctx.deinit();
+
+    // No response -> stands in for ClaimNotReady inside the challenge window.
+    try std.testing.expectError(NoMockResponse, sdk.withdrawal_controller.simulateRelease(&ctx, addr(0xC7), 3));
+
+    try mock.setResponse(sdk.abi.withdrawal_controller_abi.release_selector, &ok_return);
+    try sdk.withdrawal_controller.simulateRelease(&ctx, addr(0xC7), 3);
     try std.testing.expectEqual(@as(?mock_chain_client.SentTx, null), mock.lastSent());
 }
